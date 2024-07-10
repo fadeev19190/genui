@@ -1,21 +1,22 @@
 <!DOCTYPE html>
-<html class="writer-html5" lang="en" >
+<html class="writer-html5" lang="en" data-content_root="../../../../../">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>genui.utils.extensions.tasks.views &mdash; GenUI 0.0.0.alpha3 documentation</title>
-      <link rel="stylesheet" href="../../../../../_static/pygments.css" type="text/css" />
-      <link rel="stylesheet" href="../../../../../_static/css/theme.css" type="text/css" />
+  <title>genui.utils.extensions.tasks.views &mdash; GenUI 0.0.0a4.dev33+g9ee4536 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../../../_static/pygments.css?v=fa44fd50" />
+      <link rel="stylesheet" type="text/css" href="../../../../../_static/css/theme.css?v=19f00094" />
+
+  
   <!--[if lt IE 9]>
     <script src="../../../../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
   
-        <script data-url_root="../../../../../" id="documentation_options" src="../../../../../_static/documentation_options.js"></script>
-        <script src="../../../../../_static/jquery.js"></script>
-        <script src="../../../../../_static/underscore.js"></script>
-        <script src="../../../../../_static/_sphinx_javascript_frameworks_compat.js"></script>
-        <script src="../../../../../_static/doctools.js"></script>
-        <script src="../../../../../_static/sphinx_highlight.js"></script>
+        <script src="../../../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script src="../../../../../_static/documentation_options.js?v=429eb489"></script>
+        <script src="../../../../../_static/doctools.js?v=9a2dae69"></script>
+        <script src="../../../../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../../../genindex.html" />
     <link rel="search" title="Search" href="../../../../../search.html" /> 
@@ -26,14 +27,18 @@
     <nav data-toggle="wy-nav-shift" class="wy-nav-side">
       <div class="wy-side-scroll">
         <div class="wy-side-nav-search" >
-            <a href="../../../../../index.html" class="icon icon-home"> GenUI
+
+          
+          
+          <a href="../../../../../index.html" class="icon icon-home">
+            GenUI
           </a>
               <div class="version">
-                0.0.0.alpha3
+                0.0.0a4.dev33+g9ee4536
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="../../../../../search.html" method="get">
-    <input type="text" name="q" placeholder="Search docs" />
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
     <input type="hidden" name="check_keywords" value="yes" />
     <input type="hidden" name="area" value="default" />
   </form>
@@ -43,7 +48,7 @@
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../../../../../index.html">Welcome to GenUI’s documentation!</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../../../usage/index.html">GenUI Usage Information</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../../../../api/modules.html">GenUI Python API Documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../../api/modules.html">genui</a></li>
 </ul>
 
         </div>
@@ -59,9 +64,9 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="../../../../../index.html" class="icon icon-home"></a> &raquo;</li>
-          <li><a href="../../../../index.html">Module code</a> &raquo;</li>
-      <li>genui.utils.extensions.tasks.views</li>
+      <li><a href="../../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">genui.utils.extensions.tasks.views</li>
       <li class="wy-breadcrumbs-aside">
       </li>
   </ul>
@@ -84,10 +89,14 @@
 <span class="kn">from</span> <span class="nn">.serializers</span> <span class="kn">import</span> <span class="n">TaskProgressSerializer</span><span class="p">,</span> <span class="n">TasksSerializerFactory</span>
 
 
-<div class="viewcode-block" id="TaskProgressView"><a class="viewcode-back" href="../../../../../api/genui.utils.extensions.tasks.html#genui.utils.extensions.tasks.views.TaskProgressView">[docs]</a><span class="nd">@permission_classes</span><span class="p">((</span><span class="n">permissions</span><span class="o">.</span><span class="n">IsAuthenticated</span><span class="p">,))</span>
+<div class="viewcode-block" id="TaskProgressView">
+<a class="viewcode-back" href="../../../../../api/genui.utils.extensions.tasks.html#genui.utils.extensions.tasks.views.TaskProgressView">[docs]</a>
+<span class="nd">@permission_classes</span><span class="p">((</span><span class="n">permissions</span><span class="o">.</span><span class="n">IsAuthenticated</span><span class="p">,))</span>
 <span class="k">class</span> <span class="nc">TaskProgressView</span><span class="p">(</span><span class="n">views</span><span class="o">.</span><span class="n">APIView</span><span class="p">):</span>
 
-<div class="viewcode-block" id="TaskProgressView.get"><a class="viewcode-back" href="../../../../../api/genui.utils.extensions.tasks.html#genui.utils.extensions.tasks.views.TaskProgressView.get">[docs]</a>    <span class="nd">@swagger_auto_schema</span><span class="p">(</span><span class="n">responses</span><span class="o">=</span><span class="p">{</span><span class="mi">200</span><span class="p">:</span> <span class="n">TaskProgressSerializer</span><span class="p">()})</span>
+<div class="viewcode-block" id="TaskProgressView.get">
+<a class="viewcode-back" href="../../../../../api/genui.utils.extensions.tasks.html#genui.utils.extensions.tasks.views.TaskProgressView.get">[docs]</a>
+    <span class="nd">@swagger_auto_schema</span><span class="p">(</span><span class="n">responses</span><span class="o">=</span><span class="p">{</span><span class="mi">200</span><span class="p">:</span> <span class="n">TaskProgressSerializer</span><span class="p">()})</span>
     <span class="k">def</span> <span class="nf">get</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">request</span><span class="p">,</span> <span class="n">task_id</span><span class="p">):</span>
         <span class="c1"># TODO: check if the task belongs to the logged in user</span>
         <span class="n">result</span> <span class="o">=</span> <span class="n">AsyncResult</span><span class="p">(</span><span class="n">task_id</span><span class="p">)</span>
@@ -101,19 +110,28 @@
             <span class="k">return</span> <span class="n">Response</span><span class="p">(</span><span class="n">info</span><span class="p">,</span> <span class="n">status</span><span class="o">=</span><span class="n">status</span><span class="o">.</span><span class="n">HTTP_200_OK</span><span class="p">)</span>
         <span class="n">ret</span> <span class="o">=</span> <span class="n">serializer</span><span class="o">.</span><span class="n">errors</span>
         <span class="n">ret</span><span class="o">.</span><span class="n">update</span><span class="p">({</span><span class="s2">&quot;error&quot;</span> <span class="p">:</span> <span class="s2">&quot;Invalid serializer instance. Did you provide a valid task ID?&quot;</span><span class="p">})</span>
-        <span class="k">return</span> <span class="n">Response</span><span class="p">(</span><span class="n">ret</span><span class="p">,</span> <span class="n">status</span><span class="o">=</span><span class="n">status</span><span class="o">.</span><span class="n">HTTP_500_INTERNAL_SERVER_ERROR</span><span class="p">)</span></div></div>
+        <span class="k">return</span> <span class="n">Response</span><span class="p">(</span><span class="n">ret</span><span class="p">,</span> <span class="n">status</span><span class="o">=</span><span class="n">status</span><span class="o">.</span><span class="n">HTTP_500_INTERNAL_SERVER_ERROR</span><span class="p">)</span></div>
+</div>
 
 
-<div class="viewcode-block" id="ModelTasksView"><a class="viewcode-back" href="../../../../../api/genui.utils.extensions.tasks.html#genui.utils.extensions.tasks.views.ModelTasksView">[docs]</a><span class="k">class</span> <span class="nc">ModelTasksView</span><span class="p">(</span><span class="n">views</span><span class="o">.</span><span class="n">APIView</span><span class="p">):</span>
-<div class="viewcode-block" id="ModelTasksView.Schema"><a class="viewcode-back" href="../../../../../api/genui.utils.extensions.tasks.html#genui.utils.extensions.tasks.views.ModelTasksView.Schema">[docs]</a>    <span class="k">class</span> <span class="nc">Schema</span><span class="p">(</span><span class="n">TasksSerializerFactory</span><span class="o">.</span><span class="n">AutoSchemaMixIn</span><span class="p">,</span> <span class="n">AutoSchema</span><span class="p">):</span>
+
+<div class="viewcode-block" id="ModelTasksView">
+<a class="viewcode-back" href="../../../../../api/genui.utils.extensions.tasks.html#genui.utils.extensions.tasks.views.ModelTasksView">[docs]</a>
+<span class="k">class</span> <span class="nc">ModelTasksView</span><span class="p">(</span><span class="n">views</span><span class="o">.</span><span class="n">APIView</span><span class="p">):</span>
+<div class="viewcode-block" id="ModelTasksView.Schema">
+<a class="viewcode-back" href="../../../../../api/genui.utils.extensions.tasks.html#genui.utils.extensions.tasks.views.ModelTasksView.Schema">[docs]</a>
+    <span class="k">class</span> <span class="nc">Schema</span><span class="p">(</span><span class="n">TasksSerializerFactory</span><span class="o">.</span><span class="n">AutoSchemaMixIn</span><span class="p">,</span> <span class="n">AutoSchema</span><span class="p">):</span>
         <span class="k">pass</span></div>
+
 
     <span class="n">started_only</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">model_class</span> <span class="o">=</span> <span class="kc">None</span> <span class="c1"># needs to implement getTasksAsDict</span>
     <span class="n">schema</span> <span class="o">=</span> <span class="n">Schema</span><span class="p">()</span>
     <span class="n">permission_classes</span> <span class="o">=</span> <span class="p">(</span><span class="n">permissions</span><span class="o">.</span><span class="n">IsAuthenticated</span><span class="p">,)</span>
 
-<div class="viewcode-block" id="ModelTasksView.get"><a class="viewcode-back" href="../../../../../api/genui.utils.extensions.tasks.html#genui.utils.extensions.tasks.views.ModelTasksView.get">[docs]</a>    <span class="nd">@swagger_auto_schema</span><span class="p">(</span><span class="n">responses</span><span class="o">=</span><span class="p">{</span><span class="mi">200</span><span class="p">:</span> <span class="n">TasksSerializerFactory</span><span class="o">.</span><span class="n">get</span><span class="p">([</span><span class="s2">&quot;someTaskName&quot;</span><span class="p">])})</span>
+<div class="viewcode-block" id="ModelTasksView.get">
+<a class="viewcode-back" href="../../../../../api/genui.utils.extensions.tasks.html#genui.utils.extensions.tasks.views.ModelTasksView.get">[docs]</a>
+    <span class="nd">@swagger_auto_schema</span><span class="p">(</span><span class="n">responses</span><span class="o">=</span><span class="p">{</span><span class="mi">200</span><span class="p">:</span> <span class="n">TasksSerializerFactory</span><span class="o">.</span><span class="n">get</span><span class="p">([</span><span class="s2">&quot;someTaskName&quot;</span><span class="p">])})</span>
     <span class="k">def</span> <span class="nf">get</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">request</span><span class="p">,</span> <span class="n">pk</span><span class="p">):</span>
         <span class="k">try</span><span class="p">:</span>
             <span class="n">model</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_class</span><span class="o">.</span><span class="n">objects</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">pk</span><span class="o">=</span><span class="n">pk</span><span class="p">)</span>
@@ -128,7 +146,9 @@
         <span class="p">)</span>
         <span class="k">if</span> <span class="n">serializer</span><span class="o">.</span><span class="n">is_valid</span><span class="p">():</span>
             <span class="k">return</span> <span class="n">Response</span><span class="p">(</span><span class="n">serializer</span><span class="o">.</span><span class="n">data</span><span class="p">,</span> <span class="n">status</span><span class="o">=</span><span class="n">status</span><span class="o">.</span><span class="n">HTTP_200_OK</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">Response</span><span class="p">(</span><span class="n">serializer</span><span class="o">.</span><span class="n">errors</span><span class="p">,</span> <span class="n">status</span><span class="o">=</span><span class="n">status</span><span class="o">.</span><span class="n">HTTP_500_INTERNAL_SERVER_ERROR</span><span class="p">)</span></div></div>
+        <span class="k">return</span> <span class="n">Response</span><span class="p">(</span><span class="n">serializer</span><span class="o">.</span><span class="n">errors</span><span class="p">,</span> <span class="n">status</span><span class="o">=</span><span class="n">status</span><span class="o">.</span><span class="n">HTTP_500_INTERNAL_SERVER_ERROR</span><span class="p">)</span></div>
+</div>
+
 </pre></div>
 
            </div>
