@@ -1,0 +1,10 @@
+genui.generators.extensions package
+===================================
+
+Module contents
+---------------
+
+.. automodule:: genui.generators.extensions
+   :members:
+   :undoc-members:
+   :show-inheritance:

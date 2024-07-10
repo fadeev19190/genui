@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>genui.utils package &mdash; GenUI 0.0.0a4.dev26+ge046de9.d20240710 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=fa44fd50" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=19f00094" />
+
+  
+  <!--[if lt IE 9]>
+    <script src="../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script src="../_static/documentation_options.js?v=56bf92a5"></script>
+        <script src="../_static/doctools.js?v=9a2dae69"></script>
+        <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="genui.utils.extensions package" href="genui.utils.extensions.html" />
+    <link rel="prev" title="genui.settings.databases package" href="genui.settings.databases.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            GenUI
+          </a>
+              <div class="version">
+                0.0.0a4.dev26+ge046de9.d20240710
+              </div>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../index.html">Welcome to GenUI’s documentation!</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../usage/index.html">GenUI Usage Information</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="modules.html">genui</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="genui.html">genui package</a><ul class="current">
+<li class="toctree-l3 current"><a class="reference internal" href="genui.html#subpackages">Subpackages</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="genui.accounts.html">genui.accounts package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.compounds.html">genui.compounds package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.extensions.html">genui.extensions package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.generators.html">genui.generators package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.maps.html">genui.maps package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.models.html">genui.models package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.projects.html">genui.projects package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.qsar.html">genui.qsar package</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.settings.html">genui.settings package</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">genui.utils package</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="genui.html#submodules">Submodules</a></li>
+<li class="toctree-l3"><a class="reference internal" href="genui.html#module-genui.about">genui.about module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="genui.html#module-genui.apps">genui.apps module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="genui.html#genui-urls-module">genui.urls module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="genui.html#module-genui.wsgi">genui.wsgi module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="genui.html#module-genui">Module contents</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">GenUI</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="modules.html">genui</a></li>
+          <li class="breadcrumb-item"><a href="genui.html">genui package</a></li>
+      <li class="breadcrumb-item active">genui.utils package</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="genui-utils-package">
+<h1>genui.utils package<a class="headerlink" href="#genui-utils-package" title="Link to this heading"></a></h1>
+<section id="subpackages">
+<h2>Subpackages<a class="headerlink" href="#subpackages" title="Link to this heading"></a></h2>
+<div class="toctree-wrapper compound">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="genui.utils.extensions.html">genui.utils.extensions package</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="genui.utils.extensions.html#subpackages">Subpackages</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="genui.utils.extensions.tasks.html">genui.utils.extensions.tasks package</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="genui.utils.extensions.tasks.html#subpackages">Subpackages</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.utils.extensions.tasks.html#submodules">Submodules</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.utils.extensions.tasks.html#module-genui.utils.extensions.tasks.admin">genui.utils.extensions.tasks.admin module</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.utils.extensions.tasks.html#module-genui.utils.extensions.tasks.apps">genui.utils.extensions.tasks.apps module</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.utils.extensions.tasks.html#module-genui.utils.extensions.tasks.genuisetup">genui.utils.extensions.tasks.genuisetup module</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.utils.extensions.tasks.html#module-genui.utils.extensions.tasks.models">genui.utils.extensions.tasks.models module</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.utils.extensions.tasks.html#module-genui.utils.extensions.tasks.progress">genui.utils.extensions.tasks.progress module</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.utils.extensions.tasks.html#module-genui.utils.extensions.tasks.serializers">genui.utils.extensions.tasks.serializers module</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.utils.extensions.tasks.html#module-genui.utils.extensions.tasks.tasks">genui.utils.extensions.tasks.tasks module</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.utils.extensions.tasks.html#module-genui.utils.extensions.tasks.tests">genui.utils.extensions.tasks.tests module</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.utils.extensions.tasks.html#module-genui.utils.extensions.tasks.urls">genui.utils.extensions.tasks.urls module</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.utils.extensions.tasks.html#module-genui.utils.extensions.tasks.utils">genui.utils.extensions.tasks.utils module</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.utils.extensions.tasks.html#module-genui.utils.extensions.tasks.views">genui.utils.extensions.tasks.views module</a></li>
+<li class="toctree-l4"><a class="reference internal" href="genui.utils.extensions.tasks.html#module-genui.utils.extensions.tasks">Module contents</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="genui.utils.extensions.html#module-genui.utils.extensions">Module contents</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="genui.utils.migrations.html">genui.utils.migrations package</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="genui.utils.migrations.html#module-genui.utils.migrations">Module contents</a></li>
+</ul>
+</li>
+</ul>
+</div>
+</section>
+<section id="submodules">
+<h2>Submodules<a class="headerlink" href="#submodules" title="Link to this heading"></a></h2>
+</section>
+<section id="module-genui.utils.admin">
+<span id="genui-utils-admin-module"></span><h2>genui.utils.admin module<a class="headerlink" href="#module-genui.utils.admin" title="Link to this heading"></a></h2>
+</section>
+<section id="module-genui.utils.apps">
+<span id="genui-utils-apps-module"></span><h2>genui.utils.apps module<a class="headerlink" href="#module-genui.utils.apps" title="Link to this heading"></a></h2>
+<dl class="py class">
+<dt class="sig sig-object py" id="genui.utils.apps.UtilsConfig">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">genui.utils.apps.</span></span><span class="sig-name descname"><span class="pre">UtilsConfig</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">app_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">app_module</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/apps.html#UtilsConfig"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.apps.UtilsConfig" title="Link to this definition"></a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">AppConfig</span></code></p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="genui.utils.apps.UtilsConfig.name">
+<span class="sig-name descname"><span class="pre">name</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'genui.utils'</span></em><a class="headerlink" href="#genui.utils.apps.UtilsConfig.name" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+</section>
+<section id="module-genui.utils.exceptions">
+<span id="genui-utils-exceptions-module"></span><h2>genui.utils.exceptions module<a class="headerlink" href="#module-genui.utils.exceptions" title="Link to this heading"></a></h2>
+<p>exceptions</p>
+<p>Created by: Martin Sicho
+On: 7/23/20, 10:08 AM</p>
+<dl class="py exception">
+<dt class="sig sig-object py" id="genui.utils.exceptions.GenUIException">
+<em class="property"><span class="pre">exception</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">genui.utils.exceptions.</span></span><span class="sig-name descname"><span class="pre">GenUIException</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">original</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/exceptions.html#GenUIException"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.exceptions.GenUIException" title="Link to this definition"></a></dt>
+<dd><p>Bases: <a class="reference internal" href="#genui.utils.exceptions.GenUIExceptionMixIn" title="genui.utils.exceptions.GenUIExceptionMixIn"><code class="xref py py-class docutils literal notranslate"><span class="pre">GenUIExceptionMixIn</span></code></a>, <a class="reference external" href="https://docs.python.org/3.7/library/exceptions.html#Exception" title="(in Python v3.7)"><code class="xref py py-class docutils literal notranslate"><span class="pre">Exception</span></code></a></p>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="genui.utils.exceptions.GenUIExceptionMixIn">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">genui.utils.exceptions.</span></span><span class="sig-name descname"><span class="pre">GenUIExceptionMixIn</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">original</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/exceptions.html#GenUIExceptionMixIn"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.exceptions.GenUIExceptionMixIn" title="Link to this definition"></a></dt>
+<dd><p>Bases: <a class="reference external" href="https://docs.python.org/3.7/library/functions.html#object" title="(in Python v3.7)"><code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></a></p>
+<dl class="py method">
+<dt class="sig sig-object py" id="genui.utils.exceptions.GenUIExceptionMixIn.asJSON">
+<span class="sig-name descname"><span class="pre">asJSON</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/exceptions.html#GenUIExceptionMixIn.asJSON"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.exceptions.GenUIExceptionMixIn.asJSON" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="genui.utils.exceptions.GenUIExceptionMixIn.getData">
+<span class="sig-name descname"><span class="pre">getData</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/exceptions.html#GenUIExceptionMixIn.getData"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.exceptions.GenUIExceptionMixIn.getData" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+<dl class="py exception">
+<dt class="sig sig-object py" id="genui.utils.exceptions.GenUIWarning">
+<em class="property"><span class="pre">exception</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">genui.utils.exceptions.</span></span><span class="sig-name descname"><span class="pre">GenUIWarning</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">original</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/exceptions.html#GenUIWarning"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.exceptions.GenUIWarning" title="Link to this definition"></a></dt>
+<dd><p>Bases: <a class="reference internal" href="#genui.utils.exceptions.GenUIExceptionMixIn" title="genui.utils.exceptions.GenUIExceptionMixIn"><code class="xref py py-class docutils literal notranslate"><span class="pre">GenUIExceptionMixIn</span></code></a>, <a class="reference external" href="https://docs.python.org/3.7/library/exceptions.html#Warning" title="(in Python v3.7)"><code class="xref py py-class docutils literal notranslate"><span class="pre">Warning</span></code></a></p>
+</dd></dl>
+
+</section>
+<section id="module-genui.utils.genuisetup">
+<span id="genui-utils-genuisetup-module"></span><h2>genui.utils.genuisetup module<a class="headerlink" href="#module-genui.utils.genuisetup" title="Link to this heading"></a></h2>
+<p>genuisetup</p>
+<p>Created by: Martin Sicho
+On: 4/28/20, 4:33 PM</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="genui.utils.genuisetup.setup">
+<span class="sig-prename descclassname"><span class="pre">genui.utils.genuisetup.</span></span><span class="sig-name descname"><span class="pre">setup</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/genuisetup.html#setup"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.genuisetup.setup" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+</section>
+<section id="module-genui.utils.gpu">
+<span id="genui-utils-gpu-module"></span><h2>genui.utils.gpu module<a class="headerlink" href="#module-genui.utils.gpu" title="Link to this heading"></a></h2>
+<p>gpu</p>
+<p>Created by: Martin Sicho
+On: 6/2/20, 9:11 AM</p>
+<dl class="py exception">
+<dt class="sig sig-object py" id="genui.utils.gpu.GPUAllocationException">
+<em class="property"><span class="pre">exception</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">genui.utils.gpu.</span></span><span class="sig-name descname"><span class="pre">GPUAllocationException</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">device</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/gpu.html#GPUAllocationException"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.gpu.GPUAllocationException" title="Link to this definition"></a></dt>
+<dd><p>Bases: <a class="reference external" href="https://docs.python.org/3.7/library/exceptions.html#Exception" title="(in Python v3.7)"><code class="xref py py-class docutils literal notranslate"><span class="pre">Exception</span></code></a></p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="genui.utils.gpu.allocate">
+<span class="sig-prename descclassname"><span class="pre">genui.utils.gpu.</span></span><span class="sig-name descname"><span class="pre">allocate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">strict</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/gpu.html#allocate"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.gpu.allocate" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="genui.utils.gpu.check_availability">
+<span class="sig-prename descclassname"><span class="pre">genui.utils.gpu.</span></span><span class="sig-name descname"><span class="pre">check_availability</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/gpu.html#check_availability"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.gpu.check_availability" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="genui.utils.gpu.info">
+<span class="sig-prename descclassname"><span class="pre">genui.utils.gpu.</span></span><span class="sig-name descname"><span class="pre">info</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memsort</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/gpu.html#info"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.gpu.info" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="genui.utils.gpu.release">
+<span class="sig-prename descclassname"><span class="pre">genui.utils.gpu.</span></span><span class="sig-name descname"><span class="pre">release</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">device</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/gpu.html#release"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.gpu.release" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+</section>
+<section id="module-genui.utils.init">
+<span id="genui-utils-init-module"></span><h2>genui.utils.init module<a class="headerlink" href="#module-genui.utils.init" title="Link to this heading"></a></h2>
+<p>init</p>
+<p>Created by: Martin Sicho
+On: 4/30/20, 7:16 PM</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="genui.utils.init.checkInitCondition">
+<span class="sig-prename descclassname"><span class="pre">genui.utils.init.</span></span><span class="sig-name descname"><span class="pre">checkInitCondition</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">force</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/init.html#checkInitCondition"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.init.checkInitCondition" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="genui.utils.init.createGroup">
+<span class="sig-prename descclassname"><span class="pre">genui.utils.init.</span></span><span class="sig-name descname"><span class="pre">createGroup</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">groupName</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">models</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">permissions</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">('add',</span> <span class="pre">'change',</span> <span class="pre">'delete',</span> <span class="pre">'view')</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">overwrite</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">appendPermissions</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">force</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/init.html#createGroup"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.init.createGroup" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+</section>
+<section id="module-genui.utils.inspection">
+<span id="genui-utils-inspection-module"></span><h2>genui.utils.inspection module<a class="headerlink" href="#module-genui.utils.inspection" title="Link to this heading"></a></h2>
+<p>inspection</p>
+<p>Created by: Martin Sicho
+On: 4/30/20, 8:55 AM</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="genui.utils.inspection.discover_apps_urls">
+<span class="sig-prename descclassname"><span class="pre">genui.utils.inspection.</span></span><span class="sig-name descname"><span class="pre">discover_apps_urls</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">app_names</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">prefix</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">app_names_as_root</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/inspection.html#discover_apps_urls"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.inspection.discover_apps_urls" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="genui.utils.inspection.discover_extensions">
+<span class="sig-prename descclassname"><span class="pre">genui.utils.inspection.</span></span><span class="sig-name descname"><span class="pre">discover_extensions</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">packages</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/inspection.html#discover_extensions"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.inspection.discover_extensions" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="genui.utils.inspection.discover_extensions_urlpatterns">
+<span class="sig-prename descclassname"><span class="pre">genui.utils.inspection.</span></span><span class="sig-name descname"><span class="pre">discover_extensions_urlpatterns</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">parent</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/inspection.html#discover_extensions_urlpatterns"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.inspection.discover_extensions_urlpatterns" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="genui.utils.inspection.disover_app_urls_module">
+<span class="sig-prename descclassname"><span class="pre">genui.utils.inspection.</span></span><span class="sig-name descname"><span class="pre">disover_app_urls_module</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">app_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">parent</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/inspection.html#disover_app_urls_module"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.inspection.disover_app_urls_module" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="genui.utils.inspection.findSubclassByID">
+<span class="sig-prename descclassname"><span class="pre">genui.utils.inspection.</span></span><span class="sig-name descname"><span class="pre">findSubclassByID</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">base</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">module</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">id_attr</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3.7/library/stdtypes.html#str" title="(in Python v3.7)"><span class="pre">str</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">id_attr_val</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3.7/library/stdtypes.html#str" title="(in Python v3.7)"><span class="pre">str</span></a></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/inspection.html#findSubclassByID"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.inspection.findSubclassByID" title="Link to this definition"></a></dt>
+<dd><p>Function to fetch a given class from a certain module.
+It is identified by both its base class and a value of a
+specific identifying attribute of the class.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>base</strong> – The base class of the class we are looking for.</p></li>
+<li><p><strong>module</strong> – Module containing the class of interest.</p></li>
+<li><p><strong>id_attr</strong> – The name of the identifying attribute on the class.</p></li>
+<li><p><strong>id_attr_val</strong> – The value of the searched attribute.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="genui.utils.inspection.getFullName">
+<span class="sig-prename descclassname"><span class="pre">genui.utils.inspection.</span></span><span class="sig-name descname"><span class="pre">getFullName</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">obj</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">moduleOnly</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/inspection.html#getFullName"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.inspection.getFullName" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="genui.utils.inspection.getObjectAndModuleFromFullName">
+<span class="sig-prename descclassname"><span class="pre">genui.utils.inspection.</span></span><span class="sig-name descname"><span class="pre">getObjectAndModuleFromFullName</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">name</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/inspection.html#getObjectAndModuleFromFullName"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.inspection.getObjectAndModuleFromFullName" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="genui.utils.inspection.getSubclasses">
+<span class="sig-prename descclassname"><span class="pre">genui.utils.inspection.</span></span><span class="sig-name descname"><span class="pre">getSubclasses</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cls</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/inspection.html#getSubclasses"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.inspection.getSubclasses" title="Link to this definition"></a></dt>
+<dd><p>Fetch all existing subclasses of a class.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>cls</strong></p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="genui.utils.inspection.getSubclassesFromModule">
+<span class="sig-prename descclassname"><span class="pre">genui.utils.inspection.</span></span><span class="sig-name descname"><span class="pre">getSubclassesFromModule</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">base_cls</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">module</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/inspection.html#getSubclassesFromModule"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.inspection.getSubclassesFromModule" title="Link to this definition"></a></dt>
+<dd><p>Fetch all subclasses of a given base class from a module.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>base_cls</strong> – The base class.</p></li>
+<li><p><strong>module</strong> – The module.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="genui.utils.inspection.importFromPackage">
+<span class="sig-prename descclassname"><span class="pre">genui.utils.inspection.</span></span><span class="sig-name descname"><span class="pre">importFromPackage</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">package</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">module_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">exception</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/inspection.html#importFromPackage"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.inspection.importFromPackage" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="genui.utils.inspection.importModuleWithException">
+<span class="sig-prename descclassname"><span class="pre">genui.utils.inspection.</span></span><span class="sig-name descname"><span class="pre">importModuleWithException</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">module</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">message</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">throw</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/inspection.html#importModuleWithException"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.inspection.importModuleWithException" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+</section>
+<section id="module-genui.utils.models">
+<span id="genui-utils-models-module"></span><h2>genui.utils.models module<a class="headerlink" href="#module-genui.utils.models" title="Link to this heading"></a></h2>
+<p>models</p>
+<p>Created by: Martin Sicho
+On: 1/12/20, 3:16 PM</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="genui.utils.models.NON_POLYMORPHIC_CASCADE">
+<span class="sig-prename descclassname"><span class="pre">genui.utils.models.</span></span><span class="sig-name descname"><span class="pre">NON_POLYMORPHIC_CASCADE</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">collector</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">field</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_objs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">using</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/models.html#NON_POLYMORPHIC_CASCADE"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.models.NON_POLYMORPHIC_CASCADE" title="Link to this definition"></a></dt>
+<dd><p>This is a special cascade implementation to fix some delete errors
+when cascading polymorphic models.</p>
+<p>See: <a class="reference external" href="https://github.com/django-polymorphic/django-polymorphic/issues/229#issuecomment-398434412">https://github.com/django-polymorphic/django-polymorphic/issues/229#issuecomment-398434412</a></p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>collector</strong></p></li>
+<li><p><strong>field</strong></p></li>
+<li><p><strong>sub_objs</strong></p></li>
+<li><p><strong>using</strong></p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="genui.utils.models.OverwriteStorage">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">genui.utils.models.</span></span><span class="sig-name descname"><span class="pre">OverwriteStorage</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/models.html#OverwriteStorage"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.models.OverwriteStorage" title="Link to this definition"></a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">FileSystemStorage</span></code></p>
+<dl class="py method">
+<dt class="sig sig-object py" id="genui.utils.models.OverwriteStorage.get_available_name">
+<span class="sig-name descname"><span class="pre">get_available_name</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">name</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/models.html#OverwriteStorage.get_available_name"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.models.OverwriteStorage.get_available_name" title="Link to this definition"></a></dt>
+<dd><p>Returns a filename that’s free on the target storage system, and
+available for new content to be written to.</p>
+<p>Found at <a class="reference external" href="http://djangosnippets.org/snippets/976/">http://djangosnippets.org/snippets/976/</a></p>
+<p>This file storage solves overwrite on upload problem. Another
+proposed solution was to override the save method on the model
+like so (from <a class="reference external" href="https://code.djangoproject.com/ticket/11663">https://code.djangoproject.com/ticket/11663</a>):</p>
+<dl>
+<dt>def save(self, <a href="#id1"><span class="problematic" id="id2">*</span></a>args, <a href="#id3"><span class="problematic" id="id4">**</span></a>kwargs):</dt><dd><dl>
+<dt>try:</dt><dd><p>this = MyModelName.objects.get(id=self.id)
+if this.MyImageFieldName != self.MyImageFieldName:</p>
+<blockquote>
+<div><p>this.MyImageFieldName.delete()</p>
+</div></blockquote>
+</dd>
+</dl>
+<p>except: pass
+super(MyModelName, self).save(<a href="#id5"><span class="problematic" id="id6">*</span></a>args, <a href="#id7"><span class="problematic" id="id8">**</span></a>kwargs)</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+</section>
+<section id="module-genui.utils.pagination">
+<span id="genui-utils-pagination-module"></span><h2>genui.utils.pagination module<a class="headerlink" href="#module-genui.utils.pagination" title="Link to this heading"></a></h2>
+<p>pagination</p>
+<p>Created by: Martin Sicho
+On: 5/6/20, 10:55 AM</p>
+<dl class="py class">
+<dt class="sig sig-object py" id="genui.utils.pagination.GenuiPagination">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">genui.utils.pagination.</span></span><span class="sig-name descname"><span class="pre">GenuiPagination</span></span><a class="reference internal" href="../_modules/genui/utils/pagination.html#GenuiPagination"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.pagination.GenuiPagination" title="Link to this definition"></a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">PageNumberPagination</span></code></p>
+<dl class="py method">
+<dt class="sig sig-object py" id="genui.utils.pagination.GenuiPagination.get_next_link">
+<span class="sig-name descname"><span class="pre">get_next_link</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/pagination.html#GenuiPagination.get_next_link"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.pagination.GenuiPagination.get_next_link" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="genui.utils.pagination.GenuiPagination.get_previous_link">
+<span class="sig-name descname"><span class="pre">get_previous_link</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/pagination.html#GenuiPagination.get_previous_link"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.pagination.GenuiPagination.get_previous_link" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="genui.utils.pagination.GenuiPagination.get_url">
+<span class="sig-name descname"><span class="pre">get_url</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/pagination.html#GenuiPagination.get_url"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.pagination.GenuiPagination.get_url" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="genui.utils.pagination.GenuiPagination.page_size">
+<span class="sig-name descname"><span class="pre">page_size</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">10</span></em><a class="headerlink" href="#genui.utils.pagination.GenuiPagination.page_size" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+</section>
+<section id="module-genui.utils.serializers">
+<span id="genui-utils-serializers-module"></span><h2>genui.utils.serializers module<a class="headerlink" href="#module-genui.utils.serializers" title="Link to this heading"></a></h2>
+<p>serializers</p>
+<p>Created by: Martin Sicho
+On: 12/22/19, 6:26 PM</p>
+<dl class="py class">
+<dt class="sig sig-object py" id="genui.utils.serializers.GenericModelSerializerMixIn">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">genui.utils.serializers.</span></span><span class="sig-name descname"><span class="pre">GenericModelSerializerMixIn</span></span><a class="reference internal" href="../_modules/genui/utils/serializers.html#GenericModelSerializerMixIn"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.serializers.GenericModelSerializerMixIn" title="Link to this definition"></a></dt>
+<dd><p>Bases: <a class="reference external" href="https://docs.python.org/3.7/library/functions.html#object" title="(in Python v3.7)"><code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></a></p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="genui.utils.serializers.GenericModelSerializerMixIn.className">
+<span class="sig-name descname"><span class="pre">className</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">CharField(allow_blank=True,</span> <span class="pre">required=False)</span></em><a class="headerlink" href="#genui.utils.serializers.GenericModelSerializerMixIn.className" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="genui.utils.serializers.GenericModelSerializerMixIn.extraArgs">
+<span class="sig-name descname"><span class="pre">extraArgs</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">DictField(allow_empty=True,</span> <span class="pre">required=False)</span></em><a class="headerlink" href="#genui.utils.serializers.GenericModelSerializerMixIn.extraArgs" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="genui.utils.serializers.GenericModelSerializerMixIn.getBaseSerializerClass">
+<span class="sig-name descname"><span class="pre">getBaseSerializerClass</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">instance</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">extraFields</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/serializers.html#GenericModelSerializerMixIn.getBaseSerializerClass"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.serializers.GenericModelSerializerMixIn.getBaseSerializerClass" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="genui.utils.serializers.GenericModelSerializerMixIn.getClassNameRepresentation">
+<span class="sig-name descname"><span class="pre">getClassNameRepresentation</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">instance</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/serializers.html#GenericModelSerializerMixIn.getClassNameRepresentation"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.serializers.GenericModelSerializerMixIn.getClassNameRepresentation" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="genui.utils.serializers.GenericModelSerializerMixIn.getExtraFieldsRepresentation">
+<span class="sig-name descname"><span class="pre">getExtraFieldsRepresentation</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">instance</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/serializers.html#GenericModelSerializerMixIn.getExtraFieldsRepresentation"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.serializers.GenericModelSerializerMixIn.getExtraFieldsRepresentation" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="genui.utils.serializers.GenericModelSerializerMixIn.to_representation">
+<span class="sig-name descname"><span class="pre">to_representation</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">instance</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/serializers.html#GenericModelSerializerMixIn.to_representation"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.serializers.GenericModelSerializerMixIn.to_representation" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+</section>
+<section id="module-genui.utils.tests">
+<span id="genui-utils-tests-module"></span><h2>genui.utils.tests module<a class="headerlink" href="#module-genui.utils.tests" title="Link to this heading"></a></h2>
+<dl class="py class">
+<dt class="sig sig-object py" id="genui.utils.tests.GPUTests">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">genui.utils.tests.</span></span><span class="sig-name descname"><span class="pre">GPUTests</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">methodName</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'runTest'</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/tests.html#GPUTests"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.tests.GPUTests" title="Link to this definition"></a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">TestCase</span></code></p>
+<dl class="py method">
+<dt class="sig sig-object py" id="genui.utils.tests.GPUTests.test_info">
+<span class="sig-name descname"><span class="pre">test_info</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="../_modules/genui/utils/tests.html#GPUTests.test_info"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#genui.utils.tests.GPUTests.test_info" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+</section>
+<section id="module-genui.utils.urls">
+<span id="genui-utils-urls-module"></span><h2>genui.utils.urls module<a class="headerlink" href="#module-genui.utils.urls" title="Link to this heading"></a></h2>
+<p>urls</p>
+<p>Created by: Martin Sicho
+On: 5/3/20, 5:34 PM</p>
+</section>
+<section id="module-genui.utils.views">
+<span id="genui-utils-views-module"></span><h2>genui.utils.views module<a class="headerlink" href="#module-genui.utils.views" title="Link to this heading"></a></h2>
+</section>
+<section id="module-genui.utils">
+<span id="module-contents"></span><h2>Module contents<a class="headerlink" href="#module-genui.utils" title="Link to this heading"></a></h2>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="genui.settings.databases.html" class="btn btn-neutral float-left" title="genui.settings.databases package" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="genui.utils.extensions.html" class="btn btn-neutral float-right" title="genui.utils.extensions package" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2020, Martin Sicho.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
