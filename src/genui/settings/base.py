@@ -1,3 +1,5 @@
+### genui/src/genui/settings/base.py
+
 """
 Django settings for genui project.
 
@@ -24,7 +26,7 @@ BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
 SITE_ID = 1
 
-INSTALLED_APPS = [
+INSTALLED_APPS = ([
     'django.contrib.admin',
     'django.contrib.auth',
     'polymorphic',
@@ -47,7 +49,9 @@ INSTALLED_APPS = [
     'celery_progress',
     'django_rdkit',
     'rest_framework_extensions',
-] + GENUI_SETTINGS['APPS']
+    'genui.generators.extensions.genuireinvent.apps.GenuiReinventConfig',
+] + GENUI_SETTINGS['APPS'])
+
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
