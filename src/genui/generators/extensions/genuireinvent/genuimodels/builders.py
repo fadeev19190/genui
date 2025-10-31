@@ -1,11 +1,9 @@
 # genui/generators/extensions/genuireinvent/genuimodels/builders.py
-
-from abc import ABC, abstractmethod
 from genui.models.genuimodels import bases
 from genui.models.models import Model
 from ..models import ReinventNet
 
-ALGO_PACKAGE_PATH = "genui.generators.extensions.genuireinvent.genuimodels"
+from abc import ABC, abstractmethod
 
 class ReinventBuilder(bases.ProgressMixIn, bases.ModelBuilder, ABC):
 
@@ -21,33 +19,45 @@ class ReinventBuilder(bases.ProgressMixIn, bases.ModelBuilder, ABC):
     def sample(self, n_samples, from_inputs=None):
         pass
 
+class ReinventNetBuilder(bases.ProgressMixIn, bases.ModelBuilder):
+    """
+    Keep builder flow identical to DrugEx:
+      - progress stages around corpus creation
+      - getX returns (train, valid) placeholders (REINVENT uses same file for both)
+    """
 
-class ReinventNetBuilder(ReinventBuilder):
-
-    def __init__(self, instance: ReinventNet, initial: ReinventNet = None, progress=None, noMonitor=False):
-        # ↓↓↓ ключевая правка: передаём свой пакет алгоритмов
-        super().__init__(instance, progress, ALGO_PACKAGE_PATH)
-
+    def __init__(self, instance: ReinventNet, initial: ReinventNet = None, progress=None):
+        super().__init__(instance, progress, None)
         self.initial = initial
         self.progressStages.append("Creating Corpus...")
         self.progressStages.append("Corpus Done.")
 
     def getX(self, update=True):
+        # Stage 1: “Creating Corpus…”
         self.recordProgress()
+
         if update:
-            corpus_path = self.instance.prepareData()
-            with open(corpus_path, "r", encoding="utf-8") as f:
-                lines = [ln.strip() for ln in f if ln.strip()]
-            X_train, X_valid = lines, lines
+            # prepareData() writes the cleaned corpus to disk and syncs preview into AUX ModelFile
+            train_mf, valid_mf = self.instance.prepareData()
         else:
-            X_train, X_valid = self.instance.corpusTrain, self.instance.corpusTrain
+            # reuse already-prepared artifacts (both train/valid point to the same corpus)
+            train_mf = self.instance.corpusFileTrain
+            valid_mf = self.instance.corpusFileTrain
+
+        # Stage 2: “Corpus Done.”
         self.recordProgress()
-        return X_train, X_valid
+
+        # Return whatever your Algorithm/Model expects as X.
+        # Since our REINVENT "model" is CLI-based, returning the ModelFiles is fine;
+        # the algorithm can ignore contents and let the instance supply paths.
+        return (train_mf, valid_mf)
+
+    def getY(self):
+        return None
 
     def build(self) -> Model:
-        if self.instance.molset:
+        if self.instance.molset and self.validation:
             return super().build()
-        raise NotImplementedError("Building Reinvent network requires a MolSet with an input file.")
-
-    def sample(self, n_samples, from_inputs=None):
-        return self.model.sample(n_samples, from_inputs)
+        raise NotImplementedError(
+            "Building Reinvent network without MolSet and validation strategy is not allowed."
+        )

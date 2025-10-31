@@ -1,4 +1,5 @@
 from celery import shared_task
+from types import SimpleNamespace
 
 from genui.compounds.models import MolSet, ActivityTypes, Activity
 from genui.utils.extensions.tasks.progress import ProgressRecorder
@@ -11,47 +12,31 @@ from . import models
 # from .models import ReinventEnvironment, ReinventEnvironmentScores
 from .torchutils import cleanup
 
+
 @shared_task(name="BuildReinventModel", bind=True, queue='gpu')
 def buildReinventModel(self, model_id, builder_class, model_class):
-    # get the builder
     try:
-        model_class = getattr(models, model_class)
-        instance = model_class.objects.get(pk=model_id)
-        builder_class = getObjectAndModuleFromFullName(builder_class)[0]
+        model_cls = getattr(models, model_class)
+        instance = model_cls.objects.get(pk=model_id)
+        builder_cls = getObjectAndModuleFromFullName(builder_class)[0]
         recorder = ProgressRecorder(self)
 
-        if hasattr(instance, 'parent'):
-            builder = builder_class(
-                instance,
-                instance.parent,
-                progress=recorder
-            )
+        if hasattr(instance, 'parent') and instance.parent_id:
+            builder = builder_cls(instance, instance.parent, progress=recorder)
         else:
-            builder = builder_class(
-                instance,
-                progress=recorder
-            )
+            builder = builder_cls(instance, progress=recorder)
 
-    # build the model
-        try:
-            builder.build()
-            return {
+        # run the build inline (eager) or in the worker
+        builder.build()
+
+        # return a Task-like object so the view can safely do "task.id"
+        return SimpleNamespace(
+            id=getattr(self.request, "id", None),
+            result={
                 "errors": [repr(x) for x in builder.errors],
                 "ReinventModelName": instance.name,
                 "ReinventModelID": instance.id,
-            }
-        except Exception:
-            raise
-        finally:
-            try:
-                cleanup()
-            finally:
-                if not getattr(dj_settings, "CELERY_TASK_ALWAYS_EAGER", False):
-                    connections.close_all()
-    except Exception as e:
-        raise e
-
-@shared_task
-def run_reinventnet(model_id: int) -> str:
-    net = models.ReinventNet.get(pk=model_id)
-    return net.getModel()
+            },
+        )
+    finally:
+        cleanup()

@@ -1,14 +1,10 @@
-# genui/src/genui/generators/extensions/genuireinvent/serializers.py
-
+# genui/generators/extensions/genuireinvent/serializers.py
 from django.db.models import Q
 from rest_framework import serializers
 
 from genui.compounds.models import MolSet
 from genui.compounds.serializers import MolSetSerializer
-from genui.models.models import (
-    ModelPerformanceMetric,
-    Algorithm,           # FIX: import Algorithm from the right place
-)
+from genui.models.models import ModelPerformanceMetric
 from genui.models.serializers import (
     ValidationStrategySerializer,
     TrainingStrategySerializer,
@@ -17,77 +13,84 @@ from genui.models.serializers import (
     ValidationStrategyInitSerializer,
 )
 from . import models
-from genui.projects.models import Project
 
-
-# ---------- Validation ----------
 
 class ReinventValidationStrategySerializer(ValidationStrategySerializer):
     class Meta:
         model = models.ReinventNetValidation
-        fields = ValidationStrategySerializer.Meta.fields + ("validSetSize",)
+        fields = ValidationStrategySerializer.Meta.fields + ("validSetSize", "split_method", "valid_fraction", "random_seed", "temporal_cutoff")
 
 
 class ReinventValidationStrategyInitSerializer(ValidationStrategyInitSerializer):
-    # Allow passing metrics explicitly; otherwise we will auto-fill them in create()
+    # Optional explicit metrics
     metrics = serializers.PrimaryKeyRelatedField(
-        many=True,
-        queryset=ModelPerformanceMetric.objects.all(),
-        required=False
+        many=True, queryset=ModelPerformanceMetric.objects.all(), required=False
     )
 
     class Meta:
         model = models.ReinventNetValidation
-        fields = ReinventValidationStrategySerializer.Meta.fields   # includes "validSetSize"
+        fields = ReinventValidationStrategySerializer.Meta.fields
 
-
-# ---------- Training ----------
 
 class ReinventTrainingStrategySerializer(TrainingStrategySerializer):
-    """Expose REINVENT-specific hyperparameters in the strategy representation."""
-    class Meta:
+    class Meta(TrainingStrategySerializer.Meta):
         model = models.ReinventNetTraining
-        fields = TrainingStrategySerializer.Meta.fields + (
+
+        _base_fields = tuple(getattr(TrainingStrategySerializer.Meta, "fields", ()))
+        _extra_fields = (
             "epochs",
             "batch_size",
-            "sample_batch_size",      # NEW
-            "save_every_n_epochs",    # NEW
-        )
+            "sample_batch_size",
+            "save_every_n_epochs",
+            "best_epoch", "best_valid_loss",)
+        fields = _base_fields + _extra_fields
+
+        _base_ro = tuple(getattr(TrainingStrategySerializer.Meta, "read_only_fields", ()))
+        read_only_fields = _base_ro + ("best_epoch", "best_valid_loss", "started_at", "finished_at", "device")
 
 
 class ReinventTrainingStrategyInitSerializer(TrainingStrategyInitSerializer):
-    """Init serializer must also accept REINVENT hyperparameters."""
-    class Meta:
+    class Meta(TrainingStrategyInitSerializer.Meta):
         model = models.ReinventNetTraining
-        fields = TrainingStrategyInitSerializer.Meta.fields + (
+
+        _base_fields = tuple(getattr(TrainingStrategyInitSerializer.Meta, "fields", ()))
+        _extra_fields = (
             "epochs",
             "batch_size",
-            "sample_batch_size",      # NEW
-            "save_every_n_epochs",    # NEW
+            "sample_batch_size",
+            "save_every_n_epochs",
         )
+        fields = _base_fields + _extra_fields
 
-
-# ---------- Model (ReinventNet) ----------
 
 class ReinventNetSerializer(ModelSerializer):
     molset = MolSetSerializer(many=False, required=False, allow_null=True)
-    # Override fields to use our specialized serializers,
-    # but DO NOT re-list them in Meta.fields (base ModelSerializer already includes them).
     trainingStrategy = ReinventTrainingStrategySerializer(many=False)
     validationStrategy = ReinventValidationStrategySerializer(many=False, required=False)
-    parent = serializers.SerializerMethodField("get_parent")
+    parent = serializers.SerializerMethodField()
+
+    bestEpoch = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = models.ReinventNet
-        # Keep base fields, drop 'performance' if present, and add 'molset' and 'parent'
-        fields = [f for f in ModelSerializer.Meta.fields if f != "performance"] + ["molset", "parent"]
-        read_only_fields = [f for f in ModelSerializer.Meta.read_only_fields if f != "performance"]
+        # include bestEpoch in fields
+        fields = [f for f in ModelSerializer.Meta.fields if f != "performance"] + [
+            "molset", "parent", "bestEpoch",
+        ]
+        # keep performance read-only behavior, add bestEpoch
+        read_only_fields = [f for f in ModelSerializer.Meta.read_only_fields if f != "performance"] + [
+            "bestEpoch",
+        ]
 
     def get_parent(self, obj):
-        """Return a lightweight parent representation to avoid deep recursion."""
         if obj.parent_id:
             return {"id": obj.parent_id, "name": getattr(obj.parent, "name", None)}
         return None
+
+    def get_bestEpoch(self, obj):
+        ts = getattr(obj, "trainingStrategy", None)
+        return getattr(ts, "best_epoch", None)
+
 
 
 class ReinventNetInitSerializer(ReinventNetSerializer):
@@ -108,40 +111,50 @@ class ReinventNetInitSerializer(ReinventNetSerializer):
     def create(self, validated_data, **kwargs):
         """
         Create ReinventNet and attach training/validation strategies.
+        IMPORTANT: Do NOT pop trainingStrategy before super().create().
+        The base ModelSerializer uses it to resolve and set builder_id.
         """
-        # Pop nested payloads so the base create() doesn't choke on them
-        ts_data = validated_data.pop("trainingStrategy")
-        vs_data = validated_data.pop("validationStrategy", None)
-        parent = validated_data.pop("parent", None)
-        molset = validated_data.pop("molset", None)
+        # keep the nested payloads intact for super().create()
+        instance = super().create(
+            validated_data,
+            molset=validated_data.get("molset"),
+            **kwargs
+        )
 
-        # Create the model instance; explicitly pass molset if provided
-        instance = super().create(validated_data, molset=molset, **kwargs)
-
-        # Link parent if present
+        # parent (optional)
+        parent = validated_data.get("parent")
         if parent:
             instance.parent = parent
             instance.save(update_fields=["parent"])
 
-        # Create training strategy with REINVENT hyperparameters
+        # training strategy — create concrete ReinventNetTraining record
+        ts_data = validated_data["trainingStrategy"]
         trainingStrategy = models.ReinventNetTraining.objects.create(
             modelInstance=instance,
             algorithm=ts_data["algorithm"],
             mode=ts_data["mode"],
-            epochs=ts_data.get("epochs", models.ReinventNetTraining._meta.get_field("epochs").default),
-            batch_size=ts_data.get("batch_size", models.ReinventNetTraining._meta.get_field("batch_size").default),
-            sample_batch_size=ts_data.get("sample_batch_size",
-                                          models.ReinventNetTraining._meta.get_field("sample_batch_size").default),
-            # NEW
-            save_every_n_epochs=ts_data.get("save_every_n_epochs",
-                                            models.ReinventNetTraining._meta.get_field("save_every_n_epochs").default),
-            # NEW
+            epochs=ts_data.get(
+                "epochs",
+                models.ReinventNetTraining._meta.get_field("epochs").default
+            ),
+            batch_size=ts_data.get(
+                "batch_size",
+                models.ReinventNetTraining._meta.get_field("batch_size").default
+            ),
+            sample_batch_size=ts_data.get(
+                "sample_batch_size",
+                models.ReinventNetTraining._meta.get_field("sample_batch_size").default
+            ),
+            save_every_n_epochs=ts_data.get(
+                "save_every_n_epochs",
+                models.ReinventNetTraining._meta.get_field("save_every_n_epochs").default
+            ),
         )
-        # Persist algorithm-specific parameters (if any) via helper from base ModelSerializer
         self.saveParameters(trainingStrategy, ts_data)
 
-        # Create validation strategy (optional)
-        if vs_data is not None:
+        # validation strategy (optional)
+        vs_data = validated_data.get("validationStrategy")
+        if vs_data:
             validationStrategy = models.ReinventNetValidation.objects.create(
                 modelInstance=instance,
                 validSetSize=vs_data.get(
@@ -149,11 +162,11 @@ class ReinventNetInitSerializer(ReinventNetSerializer):
                     models.ReinventNetValidation._meta.get_field("validSetSize").default
                 ),
             )
-            # Use provided metrics or auto-select based on chosen mode/algorithm
-            if "metrics" in vs_data and vs_data["metrics"]:
-                validationStrategy.metrics.set(vs_data["metrics"])
+            # pick default metrics by mode/algorithm if not specified
+            metrics = vs_data.get("metrics")
+            if metrics:
+                validationStrategy.metrics.set(metrics)
             else:
-                # Select metrics valid for the chosen mode and algorithm
                 validationStrategy.metrics.set(
                     ModelPerformanceMetric.objects
                     .filter(validModes=ts_data["mode"])
@@ -162,14 +175,4 @@ class ReinventNetInitSerializer(ReinventNetSerializer):
                 )
             validationStrategy.save()
 
-        # Do NOT create any generator object here unless such a class actually exists.
         return instance
-
-
-# class ScoringFunctionSerializer(serializers.HyperlinkedModelSerializer):
-#     project = serializers.PrimaryKeyRelatedField(many=False, queryset=Project.objects.all())
-#
-#     class Meta:
-#         model = models.ScoringMethod
-#         fields = ('id', 'name', 'description', 'created', 'updated', 'project')
-#         read_only_fields = ('id', 'created', 'updated', )

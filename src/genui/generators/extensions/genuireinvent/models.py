@@ -1,22 +1,17 @@
 # genui/generators/extensions/genuireinvent/models.py
-"""
-Integration layer between GENUI and REINVENT.
-
-This module defines Django models and utilities to:
-- prepare a cleaned SMILES corpus from a MolSet and store a preview in ModelFile,
-- build TOML configurations for REINVENT transfer learning,
-- run the REINVENT CLI to perform transfer learning,
-- manage well-known directories (corpora, checkpoints, tmp) under GENUI's files area.
-"""
 
 from __future__ import annotations
 
 import os
-import tempfile
-from typing import Iterable, List, Iterator
-
 import shutil
-import sys
+import subprocess
+import tempfile
+from typing import Tuple
+import re
+
+from rdkit import Chem
+from rdkit.Chem.Scaffolds import MurckoScaffold
+import random
 
 from django.conf import settings
 from django.core.files.base import ContentFile
@@ -24,521 +19,444 @@ from django.db import models
 
 from genui.compounds.models import MolSet
 from genui.models.models import Model, ModelFile, TrainingStrategy, ValidationStrategy
+from genui.projects.models import DataSet
 
-import subprocess
+# ───────────────────────────────────────────────────────────────────────────────
+# Hard-coded prior: adjust this absolute path to your machine if needed.
+# ───────────────────────────────────────────────────────────────────────────────
+PRIOR_ABS = "/Users/artemfadeev/diplom/genui/files/checkpoints/prior/reinvent.prior"
+
+_BEST_EPOCH_RE = re.compile(
+    r"Best\s+validation\s+loss\s*\(\s*(?P<loss>[-+]?(\d+(\.\d+)?|\.\d+))\s*\)\s*was\s*at\s*epoch\s*(?P<epoch>\d+)",
+    re.IGNORECASE,
+)
+
+def _parse_best_from_log(text: str) -> tuple[int | None, float | None]:
+    if not text:
+        return None, None
+    m = _BEST_EPOCH_RE.search(text)
+    if not m:
+        return None, None
+    return int(m.group("epoch")), float(m.group("loss"))
 
 
-def _ensure_dir(path: str) -> str:
+# ───────────────────────────────────────────────────────────────────────────────
+# Small helper: overwrite a hashed ModelFile in-place
+# ───────────────────────────────────────────────────────────────────────────────
+def _overwrite_filefield(mf: ModelFile, data: bytes | str, *, filename: str | None = None) -> None:
     """
-    Create a directory path if it does not exist.
-
-    Args:
-        path: Absolute directory path to create.
-
-    Returns:
-        The same path for chaining.
+    Overwrite an existing FileField content while keeping its hashed location.
     """
-    os.makedirs(path, exist_ok=True)
-    return path
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+
+    current_rel = mf.file.name  # e.g. "models/ReinventNet18_project34_<hash>_aux.toml"
+    if not filename:
+        filename = os.path.basename(current_rel)
+
+    # Remove old content first to avoid orphaned blobs on some storages
+    try:
+        mf.file.storage.delete(current_rel)
+    except Exception:
+        pass
+
+    mf.file.save(filename, ContentFile(data), save=True)
+
+def _bemis_murcko(smiles: str) -> str:
+    m = Chem.MolFromSmiles(smiles)
+    if not m: return ""
+    core = MurckoScaffold.GetScaffoldForMol(m)
+    return Chem.MolToSmiles(core, isomericSmiles=False) if core else ""
+
+def _split_indices(n, frac, seed):
+    r = random.Random(seed)
+    idx = list(range(n))
+    r.shuffle(idx)
+    cut = max(1, int(n * frac))
+    valid = set(idx[:cut])
+    train = [i for i in idx if i not in valid]
+    valid = list(valid)
+    return train, valid
 
 
-def _files_root() -> str:
+class _ReinventCLIModel:
     """
-    Return the root directory for generated files as defined by GENUI settings.
-
-    Returns:
-        Absolute path of GENUI's files directory.
+    Tiny façade so the builder/algorithm API works while training happens via CLI.
     """
-    return settings.GENUI_SETTINGS["FILES_DIR"]
+    def __init__(self, net: "ReinventNet"):
+        self._net = net
+        self._checkpoint: str | None = None
 
+    def fit(self, X=None, y=None):
+        self._net.prepareData()
+        self._checkpoint = self._net.run_transfer_learning(device="cpu")
+        return self
 
-def corpora_dir() -> str:
-    """
-    Directory where cleaned SMILES corpora are stored.
+    def loadStatesFromFile(self, path: str):
+        return self
 
-    Returns:
-        Absolute path to the 'corpora' directory, ensured to exist.
-    """
-    return _ensure_dir(os.path.join(_files_root(), "corpora"))
-
-
-def checkpoints_dir() -> str:
-    """
-    Directory where REINVENT checkpoints and logs are stored.
-
-    Returns:
-        Absolute path to the 'checkpoints' directory, ensured to exist.
-    """
-    return _ensure_dir(os.path.join(_files_root(), "checkpoints"))
-
-
-def prior_path() -> str:
-    """
-    Canonical, fixed path to the REINVENT prior model file.
-    Resolves two levels above BASE_DIR (…/genui) to reach /genui/files/…,
-    regardless of the temp FILES_DIR in tests.
-    """
-    repo_root = os.path.abspath(os.path.join(settings.BASE_DIR, os.pardir, os.pardir))
-    fixed_path = os.path.join(repo_root, "files", "checkpoints", "prior", "reinvent.prior")
-
-    if not os.path.isfile(fixed_path):
-        raise FileNotFoundError(f"Hard-coded REINVENT prior not found at: {fixed_path}")
-    return fixed_path
-
-
-def tmp_dir() -> str:
-    """
-    Directory for temporary files produced during preprocessing and config building.
-
-    Returns:
-        Absolute path to the 'tmp' directory, ensured to exist.
-    """
-    return _ensure_dir(os.path.join(_files_root(), "tmp"))
+    def getModel(self):
+        return {"checkpoint": self._checkpoint}
 
 
 class ReinventNet(Model):
-    """
-    Django model that orchestrates data preparation and transfer learning for REINVENT.
-
-    Responsibilities:
-    - Prepare a cleaned SMILES corpus from a MolSet and store a short preview in ModelFile.
-    - Build a TOML config for REINVENT transfer learning based on the attached training strategy.
-    - Run the external 'reinvent' CLI to execute transfer learning.
-
-    Fields:
-        molset: Optional link to a MolSet providing input molecules.
-        parent: Optional link to a parent ReinventNet (e.g., for lineage tracking).
-    """
+    # AUX notes (DrugEx-style)
+    CORPUS_FULL_NOTE     = "reinvent_corpus_full"     # full cleaned .smi for CLI
+    CORPUS_PREVIEW_NOTE  = "reinvent_corpus_preview"  # short preview for UI/tests
+    TOML_FILE_NOTE       = "reinvent_tl_toml"         # generated TL config
+    TRAIN_LOG_NOTE       = "reinvent_train_log"       # TL stdout/stderr log
+    CHECKPOINT_FILE_NOTE = "reinvent_tl_checkpoint"   # where REINVENT writes
+    CORPUS_TRAIN_NOTE = "reinvent_corpus_train"
+    CORPUS_VALID_NOTE = "reinvent_corpus_valid"
 
     molset = models.ForeignKey(MolSet, on_delete=models.CASCADE, null=True)
     parent = models.ForeignKey("self", on_delete=models.CASCADE, null=True)
 
-    # --- ModelFile compatibility helpers ---
-    def createCorpusFile(self, note: str, name: str) -> ModelFile:
-        """
-        Get or create a ModelFile for auxiliary corpus data.
-
-        Looks up a ModelFile with the given note; if not present, creates an empty file.
-
-        Args:
-            note: Logical note used to identify the file record.
-            name: File name to create when no record exists.
-
-        Returns:
-            ModelFile instance.
-        """
+    # ── AUX getters (create the record lazily with empty payload) ──────────────
+    def _get_or_create_aux(self, note: str, filename: str) -> ModelFile:
         mf = self.files.filter(kind=ModelFile.AUXILIARY, note=note).first()
-        if mf:
-            return mf
-        return ModelFile.create(self, name, ContentFile(""), note=note)
+        if mf is None:
+            mf = ModelFile.create(self, filename, ContentFile(b""), note=note)
+        return mf
 
     @property
-    def corpusFileTrain(self) -> ModelFile:
-        """
-        Auxiliary ModelFile that stores a short preview of the cleaned training corpus (.smi).
-        """
-        return self.createCorpusFile("Reinvent_corpus_train", "corpus_train.smi")
+    def corpusFileTrain(self):  # backwards-compat alias
+        return self.corpusTrainFile
 
     @property
-    def corpusFileTest(self) -> ModelFile:
-        """
-        Reserved auxiliary ModelFile for a test corpus (.smi).
-        """
-        return self.createCorpusFile("Reinvent_corpus_test", "corpus_test.smi")
+    def corpusTrainFile(self) -> ModelFile:
+        return self._get_or_create_aux(self.CORPUS_TRAIN_NOTE, f"corpus_train_{self.pk}.smi")
 
-    # --- Corpus I/O ---
-    @staticmethod
-    def _read_smiles_from_path(path: str) -> Iterable[str]:
-        """
-        Stream SMILES lines from a plain text file.
+    @property
+    def corpusValidFile(self) -> ModelFile:
+        return self._get_or_create_aux(self.CORPUS_VALID_NOTE, f"corpus_valid_{self.pk}.smi")
 
-        Args:
-            path: Absolute path to a text file with one SMILES per line.
+    @property
+    def corpusFullFile(self) -> ModelFile:
+        # Full cleaned corpus consumed by REINVENT CLI
+        return self._get_or_create_aux(self.CORPUS_FULL_NOTE, f"corpus_full_{self.pk}.smi")
 
-        Yields:
-            Non-empty SMILES strings stripped of surrounding whitespace.
-        """
-        with open(path, "r", encoding="utf-8") as f:
-            for ln in f:
-                s = ln.strip()
-                if s:
-                    yield s
+    @property
+    def corpusPreviewFile(self) -> ModelFile:
+        # Optional short preview for UI/tests
+        return self._get_or_create_aux(self.CORPUS_PREVIEW_NOTE, f"corpus_preview_{self.pk}.smi")
 
-    # --- MolSet fallback (iterate SMILES directly from DB) ---
-    def _iter_molset_smiles(self) -> Iterator[str]:
+    @property
+    def tlTomlFile(self) -> ModelFile:
+        return self._get_or_create_aux(self.TOML_FILE_NOTE, f"tl_reinvent_{self.pk}.toml")
+
+    @property
+    def trainLogFile(self) -> ModelFile:
+        return self._get_or_create_aux(self.TRAIN_LOG_NOTE, f"reinvent_training_{self.pk}.log")
+
+    @property
+    def checkpointFile(self) -> ModelFile:
+        # We keep the checkpoint managed as an AUX file too
+        return self._get_or_create_aux(self.CHECKPOINT_FILE_NOTE, f"reinvent_{self.pk}.model")
+
+    # Backwards-compat convenience (tests may call this):
+    def get_clean_corpus_path(self) -> str:
+        return self.corpusFullFile.path
+
+    # ── Prior path (hard-coded) ────────────────────────────────────────────────
+    def get_prior_path(self) -> str:
+        if not os.path.isfile(PRIOR_ABS):
+            raise FileNotFoundError(f"REINVENT prior not found at: {PRIOR_ABS}")
+        return PRIOR_ABS
+
+    # ── Clean corpus preparation (hashed AUX only) ─────────────────────────────
+    def prepareData(self) -> Tuple[ModelFile, ModelFile]:
         """
-        Yield SMILES strings from molecules linked to this MolSet when no input file is attached.
-        Tries several common related manager names and also discovers one-to-many relations dynamically.
-        Accepts common SMILES field names.
+        Clean SMILES via reinvent.datapipeline and write:
+          - Full cleaned corpus directly to corpusFullFile.path (hashed in media/)
+          - Short preview (first 1000 lines) into corpusPreviewFile (hashed)
         """
         if not self.molset:
-            return
-        managers = []
-        # explicit guesses first
-        for name in ("molecules", "items", "entries"):
-            mgr = getattr(self.molset, name, None)
-            if mgr:
-                managers.append(mgr)
-        # discover all reverse one-to-many accessors (e.g., MoleculeInSet, GeneratedMolecule, etc.)
+            raise RuntimeError(f"No MolSet attached to {self}.")
+
+        # Decide input for datapipeline
+        input_path = None
+        if getattr(self.molset, "files", None) and self.molset.files.exists():
+            f = self.molset.files.first()
+            if f and getattr(f, "file", None):
+                input_path = f.file.path
+
+        # If needed, emit a temporary TSV with a SMILES header
+        temp_in = None
+        if not input_path:
+            with tempfile.NamedTemporaryFile(prefix=f"reinvent_raw_{self.pk}_", suffix=".smi.tsv", delete=False) as tf:
+                temp_in = tf.name
+            with open(temp_in, "w", encoding="utf-8") as w:
+                w.write("SMILES\n")
+                for s in self.molset.allSmiles:
+                    w.write(s + "\n")
+            input_path = temp_in
+
+        out_full_path = self.corpusFullFile.path  # hashed media path
+
         try:
-            for f in self.molset._meta.get_fields():
-                if getattr(f, "one_to_many", False):
-                    mgr = getattr(self.molset, f.get_accessor_name(), None)
-                    if mgr and mgr not in managers:
-                        managers.append(mgr)
-        except Exception:
-            pass
+            from reinvent.datapipeline import preprocess
+        except Exception as e:
+            if temp_in:
+                try:
+                    os.remove(temp_in)
+                except OSError:
+                    pass
+            raise RuntimeError("reinvent.datapipeline.preprocess is required.") from e
 
-        smi_fields = ("smiles", "SMILES", "canonical_smiles", "smi")
-        for mgr in managers:
+        cfg_text = f"""\
+        input_csv_file = "{input_path}"
+        smiles_column = "SMILES"
+        separator = "\\t"
+        output_smiles_file = "{out_full_path}"
+
+        [filter]
+        elements = []
+        transforms = ["standard"]
+        inchi_key_deduplicate = true
+        """
+        with tempfile.NamedTemporaryFile(prefix=f"reinvent_preprocess_{self.pk}_",
+                                         suffix=".toml", delete=False) as tf:
+            cfg_path = tf.name
+        try:
+            with open(cfg_path, "w", encoding="utf-8") as fh:
+                fh.write(cfg_text)
+            args = type("Args", (), {"config_filename": cfg_path, "log_filename": None})
+            preprocess.main(args)
+        finally:
             try:
-                for obj in mgr.all():
-                    for fld in smi_fields:
-                        val = getattr(obj, fld, None)
-                        if val:
-                            s = str(val).strip()
-                            if s:
-                                yield s
-                            break
-            except Exception:
-                continue
+                os.remove(cfg_path)
+            except OSError:
+                pass
+            if temp_in:
+                try:
+                    os.remove(temp_in)
+                except OSError:
+                    pass
 
-    # --- Public corpus props ---
-    @property
-    def corpusTrain(self) -> List[str]:
-        """
-        Load the previewed training corpus from the auxiliary ModelFile.
+        # 2) Read CLEANED full corpus and split
+        vs = getattr(self, "validationStrategy", None)
+        method = (getattr(vs, "split_method", None) or "random").lower()
+        frac = max(0.0, min(0.9, float(getattr(vs, "valid_fraction", 0.1))))
+        seed = int(getattr(vs, "random_seed", 1337))
+        cutoff = getattr(vs, "temporal_cutoff", None)
+        max_valid = int(getattr(vs, "validSetSize", 0)) or None
 
-        Returns:
-            List of SMILES strings.
-        """
-        return list(self._read_smiles_from_path(self.corpusFileTrain.path))
+        with open(out_full_path, "r", encoding="utf-8") as fh:
+            smiles = [ln.strip() for ln in fh if ln.strip()]
+        # Guard empty corpus before splitting. If the preprocessor yields 0–1 lines, your split can produce empty files.
+        if not smiles:
+            raise RuntimeError(f"Cleaned corpus is empty at {out_full_path}.")
+        if len(smiles) == 1:
+            _overwrite_filefield(self.corpusTrainFile, smiles[0] + "\n",
+                                 filename=os.path.basename(self.corpusTrainFile.file.name))
+            _overwrite_filefield(self.corpusValidFile, "",
+                                 filename=os.path.basename(self.corpusValidFile.file.name))
+            # preview build as you do…
+            return self.corpusTrainFile, self.corpusValidFile
 
-    # --- Paths ---
-    def get_clean_corpus_path(self) -> str:
-        """
-        Compute the on-disk path for the cleaned training corpus for this model.
+        if method == "scaffold":
+            buckets = {}
+            for s in smiles:
+                scf = _bemis_murcko(s) or f"NOSCAF_{hash(s) % 10_000_000}"
+                buckets.setdefault(scf, []).append(s)
+            rng = random.Random(seed)
+            scaf_ids = list(buckets.keys());
+            rng.shuffle(scaf_ids)
+            valid_target = max(1, int(len(smiles) * frac))
+            train, valid, acc = [], [], 0
+            for scf in scaf_ids:
+                grp = buckets[scf]
+                if acc < valid_target:
+                    valid.extend(grp);
+                    acc += len(grp)
+                else:
+                    train.extend(grp)
+        elif method == "temporal" and cutoff:
+            raise NotImplementedError("Temporal split needs SMILES->date mapping in MolSet.")
+        else:
+            tr_idx, va_idx = _split_indices(len(smiles), frac, seed)
+            train = [smiles[i] for i in tr_idx]
+            valid = [smiles[i] for i in va_idx]
 
-        Returns:
-            Absolute path under the corpora directory.
-        """
-        fname = f"reinvent_{self.pk}_train.smi"
-        return os.path.join(corpora_dir(), fname)
+        if max_valid is not None and len(valid) > max_valid:
+            valid = valid[:max_valid]
+        if not train:
+            move_n = max(1, len(valid) // 2)
+            train, valid = valid[:move_n], valid[move_n:]
 
-    def get_checkpoints_dir(self) -> str:
-        """
-        Directory used to store REINVENT output models and logs.
+        _overwrite_filefield(self.corpusTrainFile, "\n".join(train) + "\n",
+                             filename=os.path.basename(self.corpusTrainFile.file.name))
+        _overwrite_filefield(self.corpusValidFile, "\n".join(valid) + "\n",
+                             filename=os.path.basename(self.corpusValidFile.file.name))
 
-        Returns:
-            Absolute path to the checkpoints directory.
-        """
-        return checkpoints_dir()
+        # 3) Build preview from CLEANED corpus
+        head = []
+        with open(out_full_path, "r", encoding="utf-8") as f:
+            for i, ln in enumerate(f):
+                if i >= 1000: break
+                s = ln.strip()
+                if s: head.append(s)
+        preview_text = ("\n".join(head) + "\n") if head else ""
+        _overwrite_filefield(self.corpusPreviewFile, preview_text,
+                             filename=os.path.basename(self.corpusPreviewFile.file.name))
 
-    # --- Prior ---
-    def get_prior_path(self) -> str:
-        """
-        Validate and return the path to the prior REINVENT model.
+        # 4) Return actual train/valid
+        return self.corpusTrainFile, self.corpusValidFile
 
-        Returns:
-            Absolute path to the prior model file.
-
-        Raises:
-            FileNotFoundError: If the prior file does not exist.
-        """
-        path = prior_path()
-        if not os.path.isfile(path):
-            raise FileNotFoundError(f"Prior not found at: {path}")
-        return path
-
-    # --- TOML for TL ---
+    # ── TOML (hashed AUX only) ────────────────────────────────────────────────
     def build_tl_toml(self, *, device: str = "cpu") -> str:
-        """
-        Build a temporary TOML configuration file for REINVENT transfer learning.
+        ts = self.trainingStrategy
+        if not isinstance(ts, ReinventNetTraining):
+            raise RuntimeError("ReinventNetTraining required.")
 
-        The configuration references:
-        - the prior model file,
-        - the cleaned SMILES corpus (both train and validation),
-        - output checkpoint path,
-        - learning parameters from the attached ReinventNetTraining strategy.
-
-        Args:
-            device: PyTorch device string, e.g., 'cpu' or 'cuda'.
-
-        Returns:
-            Absolute path to the generated temporary TOML file.
-
-        Raises:
-            RuntimeError: If the training strategy is missing or invalid.
-            FileNotFoundError: If the prior model file does not exist.
-        """
-        # Previously there was no device; make it explicit to avoid runtime failures.
-        if not self.trainingStrategy or not isinstance(self.trainingStrategy, ReinventNetTraining):
-            raise RuntimeError("ReinventNetTraining is required to build TL config.")
         prior = self.get_prior_path()
-        corpus = self.get_clean_corpus_path()
-        trn = self.trainingStrategy
-        out_file = os.path.join(self.get_checkpoints_dir(), f"reinvent_{self.pk}_tl.model")
-        min_sbs = 100
-        sbs = max(min_sbs, trn.sample_batch_size)
-
+        out_path = self.checkpointFile.path   # REINVENT will write here
+        train = self.corpusTrainFile.path
+        valid = self.corpusValidFile.path
+        sbs = max(100, ts.sample_batch_size)
+        tb_dir = os.path.join(settings.MEDIA_ROOT, "models", f"tb_TL_{self.pk}")
+        os.makedirs(tb_dir, exist_ok=True)
 
         body = f"""\
 run_type = "transfer_learning"
 device = "{device}"
+tb_logdir = "{tb_dir}"
 
 [parameters]
-num_epochs = {trn.epochs}
-save_every_n_epochs = {trn.save_every_n_epochs}
-batch_size = {trn.batch_size}
+num_epochs = {ts.epochs}
+save_every_n_epochs = {ts.save_every_n_epochs}
+batch_size = {ts.batch_size}
 sample_batch_size = {sbs}
 
 input_model_file = "{prior}"
-smiles_file = "{corpus}"
-validation_smiles_file = "{corpus}"
-output_model_file = "{out_file}"
-        """
-
-        # Write the TOML to a unique temp file under GENUI tmp.
-        fd, cfg_path = tempfile.mkstemp(prefix=f"tl_reinvent_{self.pk}_", suffix=".toml", dir=tmp_dir())
-        with os.fdopen(fd, "w", encoding="utf-8") as tf:
-            tf.write(body)
-        return cfg_path
-
-    # --- Preprocessing ---
-    def prepareData(self) -> str:
-        """
-        Prepare a cleaned SMILES corpus for REINVENT.
-
-        Behavior:
-        - If the attached MolSet has a file, use it as input.
-        - Otherwise, fall back to iterating MolSet molecules and writing a raw .smi file.
-        - Build a temporary TOML for `reinvent.datapipeline.preprocess` and execute it.
-        - Store a preview (first 1000 SMILES) in the auxiliary ModelFile.
-
-        Returns:
-            Absolute path to the cleaned corpus (.smi) stored under the corpora directory.
-
-        Raises:
-            ValueError: If no MolSet is attached.
-            RuntimeError: If neither an input file nor any molecules with SMILES are available.
-            RuntimeError: If the REINVENT datapipeline is unavailable.
-        """
-        if not self.molset:
-            raise ValueError("MolSet is not attached.")
-
-        # Prefer an input file attached to MolSet if available.
-        msf = getattr(self.molset, "files", None)
-        input_path = None
-        if msf and msf.exists():
-            first = msf.first()
-            if first and getattr(first, "file", None):
-                input_path = first.file.path
-
-        # If no file is attached to the MolSet, create a raw .smi from DB molecules.
-        if not input_path:
-            raw_tsv = os.path.join(tmp_dir(), f"reinvent_raw_{self.pk}.smi.tsv")
-            _ensure_dir(os.path.dirname(raw_tsv))
-            wrote = 0
-            with open(raw_tsv, "w", encoding="utf-8") as rawf:
-                rawf.write("SMILES\n")
-                for smi in self._iter_molset_smiles():
-                    rawf.write(smi + "\n")
-                    wrote += 1
-            if wrote == 0:
-                raise RuntimeError("MolSet has no input file and contains no molecules with SMILES.")
-            input_path = raw_tsv
-        output_path = self.get_clean_corpus_path()
-
-        # Use REINVENT's datapipeline to clean/filter/transform SMILES.
-        try:
-            from reinvent.datapipeline import preprocess
-        except Exception as e:
-            raise RuntimeError(
-                "reinvent.datapipeline.preprocess is required to prepare data."
-            ) from e
-
-        # Build a minimal preprocess configuration TOML.
-        pre_body = f"""\
-input_csv_file = "{input_path}"
-smiles_column = "SMILES"
-separator = "\\t"
-output_smiles_file = "{output_path}"
-
-[filter]
-elements = []
-transforms = ["standard"]
-inchi_key_deduplicate = true
+smiles_file = "{train}"
+validation_smiles_file = "{valid}"
+output_model_file = "{out_path}"
 """
-        fd, cfg_tmp = tempfile.mkstemp(
-            prefix=f"reinvent_preprocess_{self.pk}_", suffix=".toml", dir=tmp_dir()
+
+        _overwrite_filefield(
+            self.tlTomlFile,
+            body,
+            filename=os.path.basename(self.tlTomlFile.file.name),
         )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as tf:
-                tf.write(pre_body)
+        return self.tlTomlFile.path
 
-            # The preprocess CLI expects an object with `config_filename` and optional `log_filename`.
-            args = type("Args", (), {"config_filename": cfg_tmp, "log_filename": None})
-            preprocess.main(args)
-        finally:
-            # Best-effort cleanup of the temp TOML.
-            try:
-                os.remove(cfg_tmp)
-            except OSError:
-                pass
-
-        # Sync a short preview (up to 1000 lines) into the auxiliary ModelFile.
+    @staticmethod
+    def _pick_best_checkpoint(tb_dir: str) -> tuple[int, float] | None:
         try:
-            preview = []
-            for i, s in enumerate(self._read_smiles_from_path(output_path)):
-                if i >= 1000:
-                    break
-                preview.append(s)
-            data = "\n".join(preview) + ("\n" if preview else "")
-            self.corpusFileTrain.file.save(
-                os.path.basename(self.corpusFileTrain.path), ContentFile(data), save=True
-            )
+            from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+            ea = EventAccumulator(tb_dir);
+            ea.Reload()
+            vals = ea.Scalars("valid/nll") or ea.Scalars("validation/nll")
+            if not vals: return None
+            best = min(vals, key=lambda x: x.value)
+            return (best.step, best.value)
         except Exception:
-            # Preview sync is non-critical; ignore any errors here.
-            pass
+            return None
 
-        return output_path
+    def get_active_checkpoint_path(self) -> str:
+        """
+        Returns the canonical checkpoint to load for the next stage.
+        Prefer the selected best-epoch (copied into checkpointFile.path).
+        """
+        p = self.checkpointFile.path
+        if not os.path.isfile(p):
+            raise FileNotFoundError(f"Active checkpoint missing at {p}.")
+        return p
 
-    # --- Transfer learning ---
+    # ── TL run (hashed AUX only) ───────────────────────────────────────────────
     def run_transfer_learning(self, *, device: str = "cpu") -> str:
         toml_path = self.build_tl_toml(device=device)
-        out_file = os.path.join(self.get_checkpoints_dir(), f"reinvent_{self.pk}_tl.model")
+        out_path = self.checkpointFile.path
 
-        # pick the right binary (prefer settings/env; fallback to PATH)
-        reinvent_bin = (
-                getattr(settings, "REINVENT_BIN", None)
-                or os.environ.get("REINVENT_BIN")
-                or shutil.which("reinvent")
-        )
+        reinvent_bin = (getattr(settings, "REINVENT_BIN", None)
+                        or os.environ.get("REINVENT_BIN")
+                        or shutil.which("reinvent"))
         if not reinvent_bin:
             raise RuntimeError("REINVENT binary not found. Set settings.REINVENT_BIN or $REINVENT_BIN.")
 
-        # **positional** config file (no flags)
         cmd = [reinvent_bin, toml_path]
-
-        # run & log
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            cwd=settings.BASE_DIR,  # optional; set a stable cwd
-        )
-        lines = []
-        for ln in proc.stdout or []:
-            lines.append(ln)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, bufsize=1, cwd=settings.BASE_DIR)
+        lines = [ln for ln in (proc.stdout or [])]
         rc = proc.wait()
 
-        # persist to Reinvent_training_log (unchanged from your code)
-        try:
-            self.createCorpusFile("Reinvent_training_log", "reinvent_training.log").file.save(
-                "reinvent_training.log",
-                ContentFile(f"[CMD] {' '.join(cmd)}\n[CWD] {os.getcwd()}\n{''.join(lines)}"),
-                save=True,
-            )
-        except Exception:
-            pass
+        log_text = f"[CMD] {' '.join(cmd)}\n{''.join(lines)}"
+        _overwrite_filefield(self.trainLogFile, log_text,
+                             filename=os.path.basename(self.trainLogFile.file.name))
 
         if rc != 0:
             raise RuntimeError(f"REINVENT TL failed (exit={rc}). See TOML: {toml_path}")
 
-        return out_file
+        # optional: swap to best epoch checkpoint based on TensorBoard
+        tb_dir = os.path.join(settings.MEDIA_ROOT, "models", f"tb_TL_{self.pk}")
+        best_epoch, best_loss = _parse_best_from_log(log_text)
 
-    def getModel(self) -> str:
-        """
-        Prepare data, build TOML, run TL, and return the trained model path.
-        """
-        # Ensure cleaned corpus exists for this model
-        self.prepareData()
+        if best_epoch is not None and best_loss is not None:
+            ts = self.trainingStrategy
+            ts.best_epoch = best_epoch
+            ts.best_valid_loss = best_loss
+            ts.save(update_fields=["best_epoch", "best_valid_loss"])
 
-        # Run TL and return the produced checkpoint path
-        return self.run_transfer_learning(device="cpu")
+        return out_path
+
+    # Keep the façade so builders can call into “a model”
+    def getModel(self):
+        return _ReinventCLIModel(self)
 
 
 class ReinventNetValidation(ValidationStrategy):
-    """
-    Validation strategy for REINVENT runs.
-
-    Fields:
-        validSetSize: Number of molecules to use for validation.
-    """
-    validSetSize = models.IntegerField(default=10000)
+    validSetSize = models.IntegerField(default=10000)  # keep if you want “cap”
+    split_method = models.CharField(
+        max_length=16, default="random",  # "random" | "scaffold" | "temporal"
+    )
+    valid_fraction = models.FloatField(default=0.1)  # ignored if validSetSize used
+    random_seed = models.IntegerField(default=1337)
+    temporal_cutoff = models.CharField(max_length=32, null=True, blank=True)  # e.g. "2024-06-01"
 
 
 class ReinventNetTraining(TrainingStrategy):
-    """
-    Training strategy for REINVENT transfer learning.
-
-    Fields:
-        epochs: Number of training epochs.
-        batch_size: Mini-batch size for training.
-        save_every_n_epochs: Frequency of checkpoint saving.
-        sample_batch_size: Batch size for sampling during training.
-    """
     epochs = models.IntegerField(default=10)
     batch_size = models.IntegerField(default=64)
     save_every_n_epochs = models.IntegerField(default=1)
     sample_batch_size = models.IntegerField(default=100)
 
-    class Meta:
-        verbose_name = "Reinvent Training Strategy"
-        verbose_name_plural = "Reinvent Training Strategies"
-
-    def __str__(self):
-        """
-        Human-readable representation for admin/logging.
-        """
-        return (
-            f"ReinventTraining(id={self.id}, epochs={self.epochs}, "
-            f"batch_size={self.batch_size}, "
-            f"sample_batch_size={self.sample_batch_size}, "
-            f"save_every={self.save_every_n_epochs})"
-        )
-
-    def get_prior_path(self) -> str:
-        """
-        Validate and return the path to the prior REINVENT model.
-
-        Returns:
-            Absolute path to the prior model file.
-
-        Raises:
-            FileNotFoundError: If the prior file does not exist.
-        """
-        path = prior_path()
-        if not os.path.isfile(path):
-            raise FileNotFoundError(f"Prior not found at: {path}")
-        return path
-
-    def get_checkpoints_dir(self) -> str:
-        """
-        Directory used to store REINVENT output models and logs.
-
-        Returns:
-            Absolute path to the checkpoints directory.
-        """
-        return checkpoints_dir()
+    best_epoch = models.IntegerField(null=True, blank=True)
+    best_valid_loss = models.FloatField(null=True, blank=True)
 
     def processMetaData(self, metadata: dict):
-        """
-        Update strategy fields from a metadata mapping and persist the changes.
+            self.epochs = metadata.get("epochs", self.epochs)
+            self.batch_size = metadata.get("batch_size", self.batch_size)
+            self.sample_batch_size = metadata.get("sample_batch_size", self.sample_batch_size)
+            self.save()
 
-        Recognized keys:
-        - 'epochs'
-        - 'batch_size'
-        - 'sample_batch_size'
-        - 'save_every_n_epochs'
 
-        Args:
-            metadata: Mapping of parameter names to values.
-        """
-        self.epochs = metadata.get("epochs", self.epochs)
-        self.batch_size = metadata.get("batch_size", self.batch_size)
-        self.sample_batch_size = metadata.get("sample_batch_size", self.sample_batch_size)
-        self.save_every_n_epochs = metadata.get("save_every_n_epochs", self.save_every_n_epochs)
-        self.save()
+# class ReinventEnvironment(DataSet):
+#     class RewardScheme(models.TextChoices):
+#         paretoCrowding = 'PC', _('Pareto Front with Crowding Distance (PC)')
+#         paretoSimilarity = 'PS', _('Pareto Front with Similarity (PS)')
+#         weightedSum = 'WS', _('Weighted Sum (WS)')
+#
+#     rewardScheme = models.CharField(max_length=2, choices=RewardScheme.choices, default=RewardScheme.paretoCrowding)
+#
+#     def getInstance(self, use_modifiers=True):
+#         scorers = []
+#         thresholds = []
+#         for scorer in self.scorers.all():
+#             scorers.append(scorer.getInstance(use_modifiers=use_modifiers))
+#             thresholds.append(scorer.getThreshold())
+#
+#         schemes = {
+#             self.RewardScheme.paretoCrowding: ParetoCrowdingDistance(),
+#             self.RewardScheme.paretoSimilarity: ParetoSimilarity(),
+#             self.RewardScheme.weightedSum: WeightedSum()
+#         }
+#         reward_scheme = schemes[self.rewardScheme]
+#         return environment.DrugExEnvironment(scorers, thresholds, reward_scheme)
+#
+#
+#
+# class ReinventAgent(Model):
+#     model = models.ForeignKey(ReinventNet, on_delete=models.CASCADE)
+#     parent = models.ForeignKey("self", on_delete=models.CASCADE, null=True)
