@@ -42,7 +42,7 @@ class ReinventNetBuilder(bases.ProgressMixIn, bases.ModelBuilder):
         else:
             # reuse already-prepared artifacts (both train/valid point to the same corpus)
             train_mf = self.instance.corpusFileTrain
-            valid_mf = self.instance.corpusFileTrain
+            valid_mf = self.instance.corpusValidFile
 
         # Stage 2: “Corpus Done.”
         self.recordProgress()

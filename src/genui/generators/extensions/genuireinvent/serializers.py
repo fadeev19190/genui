@@ -176,3 +176,129 @@ class ReinventNetInitSerializer(ReinventNetSerializer):
             validationStrategy.save()
 
         return instance
+
+# =====================================================================
+# 3. RL / ENVIRONMENT CONFIG SERIALIZERS
+# =====================================================================
+
+class ReinventDiversityFilterSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.ReinventDiversityFilter
+        fields = "__all__"
+
+
+class ScoreModifierSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.ScoreModifier
+        fields = "__all__"
+
+
+class ReinventEnvironmentScoresSerializer(serializers.ModelSerializer):
+    """
+    Aggregation scheme. Exposes related scoring components via read-only
+    nested lists for convenience.
+    """
+
+    property_scorers = serializers.PrimaryKeyRelatedField(
+        many=True,
+        read_only=True,
+        source="propertyscorer_set",
+    )
+    model_scorers = serializers.PrimaryKeyRelatedField(
+        many=True,
+        read_only=True,
+        source="genuimodelscorer_set",
+    )
+    unwanted_smarts_scorers = serializers.PrimaryKeyRelatedField(
+        many=True,
+        read_only=True,
+        source="unwantedsmartsscorer_set",
+    )
+
+    class Meta:
+        model = models.ReinventEnvironmentScores
+        fields = (
+            "id",
+            "aggregation_type",
+            "property_scorers",
+            "model_scorers",
+            "unwanted_smarts_scorers",
+        )
+
+
+class PropertyScorerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.PropertyScorer
+        fields = "__all__"
+
+
+class GenUIModelScorerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.GenUIModelScorer
+        fields = "__all__"
+
+
+class UnwantedSmartsScorerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.UnwantedSmartsScorer
+        fields = "__all__"
+
+
+class ReinventEnvironmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.ReinventEnvironment
+        fields = "__all__"
+
+
+# =====================================================================
+# 4. RL AGENT CONFIG SERIALIZERS
+# =====================================================================
+
+class ReinventAgentTrainingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.ReinventAgentTraining
+        fields = "__all__"
+
+
+class ReinventAgentValidationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.ReinventAgentValidation
+        fields = "__all__"
+
+
+class ReinventAgentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.ReinventAgent
+        fields = "__all__"
+
+
+# =====================================================================
+# 5. STAGED LEARNING / RL RUN SERIALIZERS
+# =====================================================================
+
+class ReinventStageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.ReinventStage
+        fields = "__all__"
+
+
+class ReinventSerializer(serializers.ModelSerializer):
+    """
+    Minimal serializer for the staged-learning runner.
+    Relationships are exposed as primary keys; you can wire up
+    nested serializers or separate endpoints as needed.
+    """
+
+    class Meta:
+        model = models.Reinvent
+        fields = "__all__"
+
+
+# =====================================================================
+# 6. PERFORMANCE LOGGING
+# =====================================================================
+
+class ModelPerformanceReinventSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = models.ModelPerformanceReinvent
+        fields = "__all__"

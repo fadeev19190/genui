@@ -40,3 +40,33 @@ def buildReinventModel(self, model_id, builder_class, model_class):
         )
     finally:
         cleanup()
+
+
+@shared_task(name="RunReinventStagedLearning", bind=True, queue="gpu")
+def runReinventStagedLearning(self, reinvent_id, device="cuda:0"):
+    """
+    Celery task to run REINVENT staged learning (RL) for a Reinvent instance.
+
+    Parameters
+    ----------
+    reinvent_id : int
+        Primary key of the Reinvent (staged-learning) configuration.
+    device : str
+        Device string passed down to Reinvent.run_staged_learning (e.g. "cuda:0" or "cpu").
+    """
+    try:
+        instance = models.Reinvent.objects.get(pk=reinvent_id)
+
+        # Run RL via the model's helper (handles TOML generation + subprocess)
+        toml_path = instance.run_staged_learning(device=device)
+
+        return SimpleNamespace(
+            id=getattr(self.request, "id", None),
+            result={
+                "ReinventRunName": instance.name,
+                "ReinventRunID": instance.id,
+                "toml_path": toml_path,
+            },
+        )
+    finally:
+        cleanup()

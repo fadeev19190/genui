@@ -1,3 +1,5 @@
+# /Users/artemfadeev/diplom/genui/src/genui/generators/extensions/genuireinvent/tests.py
+
 import json
 import os
 from django.conf import settings
@@ -236,3 +238,198 @@ class ReinventHierarchyTestCase(SetUpReinventMixIn, APITestCase):
         child = self._create_reinvent(reverse("reinvent-net-list"), initial=root)
         self.assertIsNotNone(child.parent)
         self.assertEqual(child.parent_id, root.id)
+
+
+@override_settings(
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
+class ReinventStagedLearningTestCase(SetUpReinventMixIn, APITestCase):
+    """
+    Basic test: create prior/agent from a ReinventNet checkpoint, build a staged
+    learning TOML, and sanity‑check its contents.
+    """
+
+    def test_build_staged_learning_toml(self):
+        # 1) Train a ReinventNet via the usual REST path (build=True)
+        net = self._create_reinvent(reverse("reinvent-net-list"))
+
+        # The TL build should have produced a REINVENT checkpoint at checkpointFile.path
+        ckpt_mf = net.checkpointFile
+        self.assertTrue(
+            os.path.isfile(ckpt_mf.path),
+            f"Checkpoint file not found at {ckpt_mf.path}; TL build may have failed.",
+        )
+
+        # 2) Reward scheme (no components needed for this smoke test)
+        scheme = models.ReinventEnvironmentScores.objects.create(
+            aggregation_type="geometric_mean"
+        )
+
+        # Add at least one scoring component so REINVENT has a valid reward function
+        models.UnwantedSmartsScorer.objects.create(
+            name="unwanted_alerts",
+            weight=1.0,
+            scheme=scheme,
+            enabled=True,
+        )
+
+        # 3) Diversity filter (simple example; type string just needs to be non-empty)
+        df = models.ReinventDiversityFilter.objects.create(
+            type="ScaffoldSimilarity",  # matches the special-case in to_reinvent()
+            bucket_size=10,
+            minscore=0.4,
+            minsimilarity=0.4,
+            penalty_multiplier=0.5,
+        )
+
+        # 4) Environment – use the same checkpoint for prior & agent to keep it simple
+        env = models.ReinventEnvironment.objects.create(
+            name="Test RL Environment",
+            prior_model=ckpt_mf,
+            agent_model=ckpt_mf,
+            diversity_filter=df,
+            reward_scheme=scheme,
+        )
+
+        # 5) Agent training + agent
+        train_cfg = models.ReinventAgentTraining.objects.create(
+            batch_size=32,
+            unique_sequences=True,
+            randomize_smiles=True,
+            tb_isim=False,
+            use_checkpoint=False,
+            purge_memories=False,
+            summary_csv_prefix="reinvent",
+            learning_type="dap",  # matches ReinventEnvironmentHelper.get_learning_strategies()
+            sigma=128.0,
+            rate=0.0001,
+        )
+
+        agent = models.ReinventAgent.objects.create(
+            environment=env,
+            training=train_cfg,
+            validation=None,
+            output_model=None,
+        )
+
+        # 6) Staged learning "run" container
+        rl = models.Reinvent.objects.create(
+            name="Test Staged Learning Run",
+            environment=env,
+            agent=agent,
+            tb_logdir=os.path.join(settings.MEDIA_ROOT, "tb_rl"),
+            json_out_config="_staged_learning.json",
+        )
+
+        # 7) Add a single, simple stage with inline scoring using the env scheme
+        stage = models.ReinventStage.objects.create(
+            generator=rl,
+            order=0,
+            termination_type="simple",
+            max_score=1.0,
+            min_steps=1,
+            max_steps=10,
+            scoring_source="inline",
+            scoring_scheme=scheme,
+        )
+        self.assertIsNotNone(stage.id)
+
+        # 8) Build the staged learning TOML and check key bits
+        toml_path = rl.build_staged_toml(device="cpu")
+        self.assertTrue(os.path.isfile(toml_path), f"TOML not written at {toml_path}")
+
+        with open(toml_path, "r", encoding="utf-8") as fh:
+            cfg = fh.read()
+
+        # Top-level config
+        self.assertIn('run_type = "staged_learning"', cfg)
+        self.assertIn('device = "cpu"', cfg)
+        self.assertIn(f'prior_file = "{ckpt_mf.file.path}"', cfg)
+        self.assertIn(f'agent_file = "{ckpt_mf.file.path}"', cfg)
+
+        # Learning strategy block
+        self.assertIn("[learning_strategy]", cfg)
+        self.assertIn('type = "dap"', cfg)
+        self.assertIn("sigma = 128.0", cfg)
+        self.assertIn("rate = 0.0001", cfg)
+
+        # Diversity filter block
+        self.assertIn("[diversity_filter]", cfg)
+        self.assertIn('type = "ScaffoldSimilarity"', cfg)
+        self.assertIn("bucket_size = 10", cfg)
+        self.assertIn("minscore = 0.4", cfg)
+        self.assertIn("minsimilarity = 0.4", cfg)
+
+        # Stage block
+        self.assertIn("[[stage]]", cfg)
+        self.assertIn('termination = "simple"', cfg)
+        self.assertIn("min_steps = 1", cfg)
+        self.assertIn("max_steps = 10", cfg)
+
+    def test_run_staged_learning_cli_smoke(self):
+        """
+        Optional: actually call the REINVENT staged_learning CLI.
+        This can be slow, so keep it simple (1 stage, small max_steps).
+        """
+        net = self._create_reinvent(reverse("reinvent-net-list"))
+        ckpt_mf = net.checkpointFile
+        self.assertTrue(os.path.isfile(ckpt_mf.path))
+
+        scheme = models.ReinventEnvironmentScores.objects.create(
+            aggregation_type="geometric_mean"
+        )
+        env = models.ReinventEnvironment.objects.create(
+            name="Test RL Environment (run)",
+            prior_model=ckpt_mf,
+            agent_model=ckpt_mf,
+            reward_scheme=scheme,
+        )
+
+        models.UnwantedSmartsScorer.objects.create(
+            name="unwanted_alerts",
+            weight=1.0,
+            scheme=scheme,
+            enabled=True,
+        )
+
+        train_cfg = models.ReinventAgentTraining.objects.create(
+            batch_size=16,
+            learning_type="dap",
+            sigma=64.0,
+            rate=0.0005,
+        )
+        agent = models.ReinventAgent.objects.create(
+            environment=env,
+            training=train_cfg,
+        )
+        rl = models.Reinvent.objects.create(
+            name="Test RL Run (CLI)",
+            environment=env,
+            agent=agent,
+            tb_logdir=os.path.join(settings.MEDIA_ROOT, "tb_rl_run"),
+        )
+        models.ReinventStage.objects.create(
+            generator=rl,
+            order=0,
+            termination_type="simple",
+            max_score=1.0,
+            min_steps=1,
+            max_steps=5,  # keep small
+            scoring_source="inline",
+            scoring_scheme=scheme,
+        )
+
+        # This will:
+        #   - build_staged_toml()
+        #   - call the `reinvent` binary in staged_learning mode
+        toml_path = rl.run_staged_learning(device="cpu")
+        self.assertTrue(os.path.isfile(toml_path))
+
+        # Check that the RL log was written
+        log_path = rl.get_rl_log_path()
+        self.assertTrue(os.path.isfile(log_path))
+        with open(log_path, "r", encoding="utf-8") as fh:
+            log_txt = fh.read()
+        self.assertIn("[CMD]", log_txt)
+        self.assertTrue(len(log_txt.strip()) > 0)
