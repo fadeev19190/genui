@@ -19,10 +19,12 @@ import random
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import models
+from django.utils import timezone
 
-from genui.compounds.models import MolSet
-from genui.models.models import Model, ModelFile, TrainingStrategy, ValidationStrategy
+from genui.compounds.models import MolSet, ActivitySet
+from genui.models.models import Model, ModelFile, TrainingStrategy, ValidationStrategy, ModelPerfomanceNN, ModelPerformance
 from genui.projects.models import DataSet
+from genui.generators.models import Generator
 
 from reinvent.runmodes.RL.memories.diversity_filter import DiversityFilter
 import reinvent.runmodes.RL.memories as mem
@@ -56,17 +58,34 @@ def _overwrite_filefield(mf: ModelFile, data: bytes | str, *, filename: str | No
     if isinstance(data, str):
         data = data.encode("utf-8")
 
-    current_rel = mf.file.name  # e.g. "models/ReinventNet18_project34_<hash>_aux.toml"
-    if not filename:
-        filename = os.path.basename(current_rel)
+    # Prefer true in-place overwrite for local storage
+    try:
+        p = mf.file.path
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "wb") as fh:
+            fh.write(data)
+        return
+    except Exception:
+        pass
 
-    # Remove old content first to avoid orphaned blobs on some storages
+    # Fallback for storages without .path (S3 etc.)
+    current_rel = mf.file.name
+    if not current_rel:
+        # first save
+        mf.file.save(filename or f"aux_{mf.pk}", ContentFile(data), save=True)
+        return
+
     try:
         mf.file.storage.delete(current_rel)
     except Exception:
         pass
 
-    mf.file.save(filename, ContentFile(data), save=True)
+    # Force same name
+    mf.file.save(current_rel, ContentFile(data), save=False)
+    mf.file.name = current_rel
+    mf.save(update_fields=["file"])
+
+
 
 def _bemis_murcko(smiles: str) -> str:
     m = Chem.MolFromSmiles(smiles)
@@ -504,15 +523,28 @@ class ReinventDiversityFilter(models.Model):
             d["penalty_multiplier"] = self.penalty_multiplier
         return d
 
-
-class ReinventEnvironment(models.Model):
+# TODO: predelat na Dataset
+class ReinventEnvironment(DataSet):
     name = models.CharField(max_length=255)
 
+    # Backwards-compatible (already in your model)
     prior_model = models.ForeignKey(
-        ModelFile, on_delete=models.PROTECT, related_name="reinvent_prior_files"
+        ModelFile, on_delete=models.PROTECT, related_name="reinvent_prior_files",
+        null=True, blank=True
     )
     agent_model = models.ForeignKey(
-        ModelFile, on_delete=models.PROTECT, related_name="reinvent_agent_files"
+        ModelFile, on_delete=models.PROTECT, related_name="reinvent_agent_files",
+        null=True, blank=True
+    )
+
+    # NEW: choose from existing models (user-added or previously trained)
+    prior_net = models.ForeignKey(
+        "ReinventNet", on_delete=models.PROTECT, related_name="reinvent_as_prior",
+        null=True, blank=True
+    )
+    agent_net = models.ForeignKey(
+        "ReinventNet", on_delete=models.PROTECT, related_name="reinvent_as_agent",
+        null=True, blank=True
     )
 
     diversity_filter = models.ForeignKey(ReinventDiversityFilter, null=True, blank=True, on_delete=models.SET_NULL)
@@ -522,68 +554,38 @@ class ReinventEnvironment(models.Model):
     inception_memory_size = models.IntegerField(default=0)
     inception_sample_size = models.IntegerField(default=0)
 
+    def get_prior_path(self) -> str:
+        if self.prior_net:
+            return self.prior_net.get_active_checkpoint_path()
+        if self.prior_model:
+            return self.prior_model.file.path
+        raise RuntimeError("No prior selected: set prior_net or prior_model.")
+
+    def get_agent_path(self) -> str:
+        if self.agent_net:
+            return self.agent_net.get_active_checkpoint_path()
+        if self.agent_model:
+            return self.agent_model.file.path
+        raise RuntimeError("No agent selected: set agent_net or agent_model.")
+
 
 # =====================================================================
 # SCORING
 # =====================================================================
 
-class ScoreModifier(models.Model):
+class ScoreModifier(DataSet):
     """
-    DrugEx-like modifiers that export REINVENT-compatible transforms.
+    Base class for score modifiers (DrugEx style).
+    Stored polymorphically; concrete implementations are subclasses.
     """
 
-    modifier_type = models.CharField(max_length=32, choices=[
-        ("ClippedScore", "ClippedScore"),
-        ("SmoothHump", "SmoothHump"),
-    ])
-
-    # DrugEx parameters
-    upper = models.FloatField(null=True, blank=True)
-    lower = models.FloatField(null=True, blank=True)
-    high = models.FloatField(null=True, blank=True)
-    low = models.FloatField(null=True, blank=True)
-    smooth = models.BooleanField(default=False)
-    sigma = models.FloatField(null=True, blank=True)
-
-    def to_reinvent_transform(self):
-
-        # ClippedScore (smooth=False) → double sigmoid
-        if self.modifier_type == "ClippedScore" and not self.smooth:
-            return {
-                "type": "double_sigmoid",
-                "low": self.lower,
-                "high": self.upper,
-                "coef_div": float(self.upper - self.lower),
-                "coef_si": 20,
-                "coef_se": 20,
-            }
-
-        # ClippedScore (smooth=True) → mirrored sigmoid
-        if self.modifier_type == "ClippedScore" and self.smooth:
-            span = float(self.upper - self.lower)
-            k = 1.0 / (span + 1e-9)
-            return {
-                "type": "reverse_sigmoid",
-                "low": self.lower,
-                "high": self.upper,
-                "k": k,
-            }
-
-        # SmoothHump → double sigmoid hump
-        if self.modifier_type == "SmoothHump":
-            return {
-                "type": "double_sigmoid",
-                "low": self.lower,
-                "high": self.upper,
-                "coef_div": float(self.upper - self.lower),
-                "coef_si": int(self.sigma * 20),
-                "coef_se": int(self.sigma * 20),
-            }
-
-        return None
+    def to_reinvent_transform(self) -> dict:
+        raise NotImplementedError("Override in subclass.")
 
 
-class ReinventEnvironmentScores(models.Model):
+
+# TODO: dat do Environmentu
+class ReinventEnvironmentScores(ActivitySet):
     aggregation_type = models.CharField(
         max_length=64,
         choices=[
@@ -592,22 +594,82 @@ class ReinventEnvironmentScores(models.Model):
         ]
     )
 
+class ClippedScore(ScoreModifier):
+    """
+    Mirrors DrugEx.modifiers.ClippedScore / SmoothClippedScore configuration,
+    but exports REINVENT transform dict.
+    """
+    upper = models.FloatField(null=False)
+    lower = models.FloatField(null=False, default=0.0)
+    high = models.FloatField(null=False, default=1.0)
+    low = models.FloatField(null=False, default=0.0)
+    smooth = models.BooleanField(null=False, default=False)
+
+    def to_reinvent_transform(self) -> dict:
+        # Keep your existing transform mapping logic, now per-class.
+        if not self.smooth:
+            # "clipped" effect via double sigmoid window
+            return {
+                "type": "double_sigmoid",
+                "low": float(self.lower),
+                "high": float(self.upper),
+                "coef_div": float(self.upper - self.lower),
+                "coef_si": 20,
+                "coef_se": 20,
+            }
+
+        # smooth=True -> gentler boundary (your earlier mapping)
+        span = float(self.upper - self.lower)
+        k = 1.0 / (span + 1e-9)
+        return {
+            "type": "reverse_sigmoid",
+            "low": float(self.lower),
+            "high": float(self.upper),
+            "k": float(k),
+        }
+
+
+class SmoothHump(ScoreModifier):
+    """
+    Mirrors DrugEx.modifiers.SmoothHump, exports REINVENT hump transform.
+    """
+    upper = models.FloatField(null=False, default=1.0)
+    lower = models.FloatField(null=False, default=0.0)
+    sigma = models.FloatField(null=False, default=0.5)
+
+    def to_reinvent_transform(self) -> dict:
+        # Your earlier mapping
+        return {
+            "type": "double_sigmoid",
+            "low": float(self.lower),
+            "high": float(self.upper),
+            "coef_div": float(self.upper - self.lower),
+            "coef_si": int(float(self.sigma) * 20),
+            "coef_se": int(float(self.sigma) * 20),
+        }
+
 
 class ScoringMethod(models.Model):
     name = models.CharField(max_length=255)
     weight = models.FloatField(default=1.0)
-    scheme = models.ForeignKey(
-        ReinventEnvironmentScores,
-        on_delete=models.CASCADE,
-        related_name="%(class)s_set"
-    )
-    modifier = models.ForeignKey(ScoreModifier, null=True, blank=True, on_delete=models.SET_NULL)
+    scheme = models.ForeignKey("ReinventEnvironmentScores", on_delete=models.CASCADE, related_name="%(class)s_set")
+    modifier = models.ForeignKey("ScoreModifier", null=True, blank=True, on_delete=models.SET_NULL)
 
     class Meta:
         abstract = True
 
-    def build_transform(self):
-        return self.modifier.to_reinvent_transform() if self.modifier else None
+    def build_transform(self) -> dict | None:
+        mod = getattr(self, "modifier", None)
+        if not mod:
+            return None
+        # If ScoreModifier is base, try to downcast via reverse relations
+        for attr in ("clippedscore", "smoothhump"):
+            child = getattr(mod, attr, None)
+            if child is not None:
+                mod = child
+                break
+        fn = getattr(mod, "to_reinvent_transform", None)
+        return fn() if callable(fn) else None
 
 
 class PropertyScorer(ScoringMethod):
@@ -638,7 +700,7 @@ def learning_strategy_choices():
     return [(x, x) for x in ReinventEnvironmentHelper.get_learning_strategies()]
 
 
-class ReinventAgentTraining(models.Model):
+class ReinventAgentTraining(TrainingStrategy):
     batch_size = models.IntegerField(default=64)
     unique_sequences = models.BooleanField(default=True)
     randomize_smiles = models.BooleanField(default=True)
@@ -654,55 +716,55 @@ class ReinventAgentTraining(models.Model):
     rate = models.FloatField(default=0.0001)
 
 
-class ReinventAgentValidation(models.Model):
+class ReinventAgentValidation(ValidationStrategy):
     validate_every = models.IntegerField(default=50)
     validation_dataset = models.ForeignKey(ModelFile, null=True, blank=True, on_delete=models.SET_NULL)
 
 
-class ReinventAgent(models.Model):
+class ReinventAgent(Model):
     environment = models.ForeignKey(ReinventEnvironment, on_delete=models.PROTECT)
     training = models.ForeignKey(ReinventAgentTraining, on_delete=models.PROTECT)
     validation = models.ForeignKey(ReinventAgentValidation, null=True, blank=True, on_delete=models.SET_NULL)
+    #TODO pouzit Models aby dedilo logiku
     output_model = models.ForeignKey(ModelFile, null=True, blank=True, on_delete=models.SET_NULL)
 
-
-# =====================================================================
-# STAGED LEARNING GENERATOR
-# =====================================================================
-
-class Reinvent(models.Model):
-    name = models.CharField(max_length=255)
-    environment = models.ForeignKey(ReinventEnvironment, on_delete=models.PROTECT)
-    agent = models.ForeignKey(ReinventAgent, on_delete=models.PROTECT)
-
+    # moved from Generator (keep defaults to avoid breaking existing configs)
     tb_logdir = models.CharField(max_length=255, default="tb_logs")
     json_out_config = models.CharField(max_length=255, default="_staged_learning.json")
 
-    # ------------------------------------------------------------------
-    # Simple file helpers for staged learning (no ModelFile here)
-    # ------------------------------------------------------------------
+    def getGenerator(self):
+        # Mirrors DrugExAgent.getGenerator()
+        return self.generator.order_by("-id").first()
 
+    # ------------------------------------------------------------------
+    # Simple file helpers for staged learning
+    # ------------------------------------------------------------------
     def _sl_dir(self) -> str:
-        """Directory where staged-learning TOML and logs are stored."""
-        from django.conf import settings  # already imported at top of file
         base = getattr(settings, "MEDIA_ROOT", ".")
         return os.path.join(base, "reinvent_sl")
 
     def get_toml_path(self) -> str:
-        """Absolute path to this run's staged-learning TOML."""
-        return os.path.join(self._sl_dir(), f"staged_learning_{self.pk}.toml")
+        gen = self.getGenerator()
+        if not gen:
+            raise RuntimeError("This ReinventAgent is not attached to a Reinvent generator.")
+        return os.path.join(self._sl_dir(), f"staged_learning_{gen.pk}.toml")
 
     def get_rl_log_path(self) -> str:
-        """Absolute path to this run's RL log file."""
-        return os.path.join(self._sl_dir(), f"reinvent_rl_{self.pk}.log")
+        gen = self.getGenerator()
+        if not gen:
+            raise RuntimeError("This ReinventAgent is not attached to a Reinvent generator.")
+        return os.path.join(self._sl_dir(), f"reinvent_rl_{gen.pk}.log")
 
     # ------------------------------------------------------------------
     # Build staged-learning TOML
     # ------------------------------------------------------------------
     def build_staged_toml(self, device="cuda:0") -> str:
+        gen = self.getGenerator()
+        if not gen:
+            raise RuntimeError("This ReinventAgent is not attached to a Reinvent generator.")
 
         env = self.environment
-        train_cfg = self.agent.training
+        train_cfg = self.training
 
         lines = []
         lines.append('run_type = "staged_learning"')
@@ -716,13 +778,9 @@ class Reinvent(models.Model):
         lines.append(f"use_checkpoint = {str(train_cfg.use_checkpoint).lower()}")
         lines.append(f'summary_csv_prefix = "{train_cfg.summary_csv_prefix}"')
 
-        prior_file = env.prior_model
-        if not prior_file:
-            raise RuntimeError("No prior model file set.")
-        lines.append(f'prior_file = "{prior_file.file.path}"')
-
-        agent_file = env.agent_model
-        lines.append(f'agent_file = "{agent_file.file.path}"')
+        # NOTE: model selection now supports Model OR ModelFile
+        lines.append(f'prior_file = "{env.get_prior_path()}"')
+        lines.append(f'agent_file = "{env.get_agent_path()}"')
 
         lines.append(f"batch_size = {train_cfg.batch_size}")
         lines.append(f"unique_sequences = {str(train_cfg.unique_sequences).lower()}")
@@ -742,10 +800,7 @@ class Reinvent(models.Model):
             d = env.diversity_filter.to_reinvent()
             lines.append("[diversity_filter]")
             for k, v in d.items():
-                if isinstance(v, str):
-                    lines.append(f'{k} = "{v}"')
-                else:
-                    lines.append(f"{k} = {v}")
+                lines.append(f'{k} = "{v}"' if isinstance(v, str) else f"{k} = {v}")
             lines.append("")
 
         # INCEPTION
@@ -758,23 +813,19 @@ class Reinvent(models.Model):
                 lines.append(f"sample_size = {env.inception_sample_size}")
             lines.append("")
 
-        # STAGES ---------------------------------------------------------
-        stages = list(self.stages.order_by("order"))
+        # STAGES
+        stages = list(gen.stages.order_by("order"))
         if not stages:
             raise RuntimeError("Staged learning requires at least one stage.")
+
+        sl_dir = self._sl_dir()
+        os.makedirs(sl_dir, exist_ok=True)
 
         for st in stages:
             lines.append("[[stage]]")
 
-            if st.chkpt_file:
-                chkpt_path = st.chkpt_file.file.path
-
-            else:
-                # simple default path under the same RL run folder
-                chkpt_path = os.path.join(
-                    self._sl_dir(),  # you already have this from earlier fixes
-                    f"agent_stage{st.order}_run{self.pk}.chkpt",
-                )
+            default_chkpt = os.path.join(sl_dir, f"agent_stage{st.order}_run{gen.pk}.chkpt")
+            chkpt_path = st.resolve_checkpoint_path(default_chkpt)
             lines.append(f'chkpt_file = "{chkpt_path}"')
 
             lines.append(f'termination = "{st.termination_type}"')
@@ -785,18 +836,13 @@ class Reinvent(models.Model):
 
             prefix = "stage.scoring"
 
-            # EXTERNAL SCORING FILE -------------------------------------
+            # EXTERNAL SCORING FILE
             if st.scoring_source == "file":
                 scheme = st.scoring_scheme
                 if not scheme:
-                    raise RuntimeError(
-                        "Stage requires a scoring_scheme when using scoring_source='file'."
-                    )
-
+                    raise RuntimeError("Stage requires scoring_scheme when scoring_source='file'.")
                 if not st.scoring_file:
-                    raise RuntimeError(
-                        "Stage scoring_source='file' but scoring_file is not set."
-                    )
+                    raise RuntimeError("Stage scoring_source='file' but scoring_file is not set.")
 
                 lines.append(f"[{prefix}]")
                 lines.append(f'type = "{scheme.aggregation_type}"')
@@ -805,18 +851,15 @@ class Reinvent(models.Model):
                 lines.append("")
                 continue
 
-            # INLINE SCORING ---------------------------------------------
+            # INLINE SCORING
             scheme = st.scoring_scheme or env.reward_scheme
             if not scheme:
-                raise RuntimeError(
-                    "Inline scoring requires either stage scoring_scheme or environment.reward_scheme."
-                )
+                raise RuntimeError("Inline scoring requires stage scoring_scheme or environment.reward_scheme.")
 
             lines.append(f"[{prefix}]")
             lines.append(f'type = "{scheme.aggregation_type}"')
             lines.append("")
 
-            # PROPERTY SCORERS
             for ps in PropertyScorer.objects.filter(scheme=scheme).order_by("id"):
                 prop = ps.property_name
                 lines.append(f"[[{prefix}.component]]")
@@ -827,45 +870,34 @@ class Reinvent(models.Model):
 
                 tr = ps.build_transform()
                 if tr:
+                    lines.append(f"[{prefix}.component.{prop}.endpoint.transform]")
                     for k, v in tr.items():
-                        if isinstance(v, str):
-                            lines.append(
-                                f'{prefix}.component.{prop}.endpoint.transform.{k} = "{v}"'
-                            )
-                        else:
-                            lines.append(
-                                f"{prefix}.component.{prop}.endpoint.transform.{k} = {v}"
-                            )
+                        lines.append(f'{k} = "{v}"' if isinstance(v, str) else f"{k} = {v}")
                 lines.append("")
 
-            # UNWANTED SMARTS
             for us in UnwantedSmartsScorer.objects.filter(scheme=scheme).order_by("id"):
                 if not us.enabled:
                     continue
-
                 patterns = us.load_patterns()
 
                 lines.append(f"[[{prefix}.component]]")
                 lines.append(f"[{prefix}.component.custom_alerts]")
+
+                # IMPORTANT: endpoint must be a table/dict (array-of-tables is fine)
                 lines.append(f"[[{prefix}.component.custom_alerts.endpoint]]")
                 lines.append(f'name = "{us.name}"')
                 lines.append(f"weight = {us.weight}")
-                lines.append("params.smarts = [")
 
+                # IMPORTANT: REINVENT expects params under endpoint, use dotted keys
+                lines.append("params.smarts = [")
                 for p in patterns:
                     lines.append(f'  "{p}",')
                 lines.append("]")
                 lines.append("")
 
-            lines.append("")  # blank line after each stage
+            lines.append("")
 
-        # END STAGES -----------------------------------------------------
-
-        # Write TOML to a simple file under MEDIA_ROOT/reinvent_sl/
         body = "\n".join(lines) + "\n"
-        sl_dir = self._sl_dir()
-        os.makedirs(sl_dir, exist_ok=True)
-
         toml_path = self.get_toml_path()
         with open(toml_path, "w", encoding="utf-8") as fh:
             fh.write(body)
@@ -883,14 +915,10 @@ class Reinvent(models.Model):
             or os.environ.get("REINVENT_BIN")
             or shutil.which("reinvent")
         )
-
         if not reinvent_bin:
-            raise RuntimeError(
-                "REINVENT binary not found. Set REINVENT_BIN in settings or environment."
-            )
+            raise RuntimeError("REINVENT binary not found. Set REINVENT_BIN in settings or env.")
 
         cmd = [reinvent_bin, toml_path]
-
         rl_dir = self._sl_dir()
         os.makedirs(rl_dir, exist_ok=True)
 
@@ -906,33 +934,46 @@ class Reinvent(models.Model):
         lines = [ln for ln in (proc.stdout or [])]
         rc = proc.wait()
 
-        # Write log to a simple file
-        sl_dir = self._sl_dir()
-        os.makedirs(sl_dir, exist_ok=True)
-
         log_path = self.get_rl_log_path()
         log_text = f"[CMD] {' '.join(cmd)}\n{''.join(lines)}"
         with open(log_path, "w", encoding="utf-8") as fh:
             fh.write(log_text)
 
         if rc != 0:
-            raise RuntimeError(
-                f"REINVENT staged learning failed (exit {rc}). See log: {log_path}"
-            )
+            raise RuntimeError(f"REINVENT staged learning failed (exit {rc}). See log: {log_path}")
 
         return toml_path
+
+
+class Reinvent(Generator):
+    # keep fields if you already migrated data; frontend can keep using them
+    environment = models.ForeignKey(ReinventEnvironment, on_delete=models.PROTECT)
+    agent = models.ForeignKey(ReinventAgent, on_delete=models.PROTECT, related_name="generator")
+
+    def build_staged_toml(self, device="cuda:0") -> str:
+        return self.agent.build_staged_toml(device=device)
+
+    def run_staged_learning(self, device="cuda:0") -> str:
+        return self.agent.run_staged_learning(device=device)
 
 # =====================================================================
 # 6. STAGE MODEL
 # =====================================================================
 
 class ReinventStage(models.Model):
-    generator = models.ForeignKey(Reinvent, related_name="stages", on_delete=models.CASCADE)
+    generator = models.ForeignKey("Reinvent", related_name="stages", on_delete=models.CASCADE)
     order = models.IntegerField()
 
+    # existing
     chkpt_file = models.ForeignKey(
         ModelFile, null=True, blank=True, on_delete=models.SET_NULL,
         related_name="reinvent_stage_checkpoints"
+    )
+
+    # NEW: pick an existing trained net as the checkpoint source
+    chkpt_net = models.ForeignKey(
+        "ReinventNet", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="reinvent_stage_checkpoint_nets"
     )
 
     termination_type = models.CharField(max_length=64, default="simple")
@@ -947,16 +988,14 @@ class ReinventStage(models.Model):
     )
 
     scoring_scheme = models.ForeignKey(
-        ReinventEnvironmentScores,
-        null=True,
-        blank=True,
+        "ReinventEnvironmentScores",
+        null=True, blank=True,
         on_delete=models.SET_NULL
     )
 
     scoring_file = models.ForeignKey(
         ModelFile,
-        null=True,
-        blank=True,
+        null=True, blank=True,
         on_delete=models.SET_NULL,
         related_name="reinvent_stage_scoring_files"
     )
@@ -964,24 +1003,29 @@ class ReinventStage(models.Model):
     class Meta:
         ordering = ["order"]
 
-    def __str__(self):
-        return f"Stage {self.order} (Generator {self.generator_id})"
+    def resolve_checkpoint_path(self, default_path: str) -> str:
+        if self.chkpt_net:
+            return self.chkpt_net.get_active_checkpoint_path()
+        if self.chkpt_file:
+            return self.chkpt_file.file.path
+        return default_path
 
 # =====================================================================
 # 7. PERFORMANCE LOGGING
 # =====================================================================
 
-class ModelPerformanceReinvent(models.Model):
-    agent = models.ForeignKey(ReinventAgent, on_delete=models.CASCADE)
-    step = models.IntegerField()
-    stage_index = models.IntegerField()
 
+
+class ModelPerformanceReinvent(ModelPerformance):
+    epoch = models.IntegerField()
+    step = models.IntegerField()
+    created = models.DateTimeField(default=timezone.now, db_index=True)
+
+    isOnValidationSet = models.BooleanField(default=False)
+    note = models.CharField(max_length=128, blank=True)
+
+    stage_index = models.IntegerField(null=True, blank=True)
     avg_score = models.FloatField(null=True, blank=True)
     fraction_valid = models.FloatField(null=True, blank=True)
     avg_nll = models.FloatField(null=True, blank=True)
     unique_scaffolds = models.IntegerField(null=True, blank=True)
-
-    created = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        ordering = ["created"]

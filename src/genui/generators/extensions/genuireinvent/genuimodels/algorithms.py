@@ -1,7 +1,10 @@
 # genui/src/genui/generators/extensions/genuireinvent/genuimodels/algorithms.py
-from abc import ABC
 
-import torch  # only needed for the serializer; safe to keep
+from __future__ import annotations
+
+from abc import ABC
+import pickle
+
 from genui.models.genuimodels import bases
 from genui.models.models import ModelFileFormat
 
@@ -9,23 +12,23 @@ from genui.models.models import ModelFileFormat
 class ReinventAlgorithm(bases.Algorithm, ABC):
     """
     Thin adapter around the external REINVENT CLI.
-    - No dataloaders, no in-RAM training loops.
-    - Training is delegated to the model facade returned by ReinventNet.getModel().
+
+    Training is delegated to the model facade returned by ReinventNet.getModel().
+    The builder/GenUI training pipeline will call Algorithm.fit(); internally that
+    triggers the CLI-based transfer learning in ReinventNet.run_transfer_learning().
     """
 
     def __init__(self, builder, callback=None):
         super().__init__(builder, callback)
-        # minimal progress – DrugEx-style stage names are set in the builder
         self.train_params = {}
+        self._model = None
 
     @classmethod
     def getFileFormats(cls, attach_to=None):
-        # keep a single pkg format; this artifact typically stores a tiny dict
-        # with the produced checkpoint path (see getSerializer()).
-        pkg = ModelFileFormat.objects.get_or_create(
+        pkg, _ = ModelFileFormat.objects.get_or_create(
             fileExtension=".pkg",
-            description="State of a neural network built with PyTorch (or path to external checkpoint)."
-        )[0]
+            description="Serialized metadata for REINVENT (e.g., produced checkpoint path).",
+        )
         if attach_to:
             cls.attachToInstance(attach_to, [pkg], attach_to.fileFormats)
 
@@ -38,46 +41,69 @@ class ReinventAlgorithm(bases.Algorithm, ABC):
         return self._model
 
     def predict(self, X):
+        # REINVENT net here is used as a generator; prediction isn't applicable.
         return [], None
 
-    # REINVENT doesn't support in-RAM sampling through this adapter; you can
-    # wire a sampling endpoint later if you add a runtime that loads checkpoints.
     def sample(self, n_samples, from_inputs=None):
         raise NotImplementedError("Sampling is not implemented for the REINVENT CLI adapter.")
 
     def getSerializer(self):
-        # Persist the minimal payload that our facade's getModel() returns
-        # (e.g., {"checkpoint": "/path/to/reinvent_<pk>_tl.model"})
-        return lambda path: torch.save(self.model.getModel(), path)
+        """
+        Persist minimal metadata needed to re-associate a trained artifact with this Algorithm.
+
+        NOTE:
+        - The real checkpoint is managed by ReinventNet.checkpointFile (AUX ModelFile).
+        - This .pkg payload is primarily for GenUI's generic model-serialization contract.
+        """
+        def _save(path: str):
+            payload = {}
+            try:
+                # facade.getModel() returns {"checkpoint": "..."} in your setup
+                payload = self.model.getModel() if self.model else {}
+            except Exception:
+                payload = {}
+            with open(path, "wb") as f:
+                pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+        return _save
 
     def getDeserializer(self):
-        # There is nothing to restore into RAM. Keep as a no-op that just returns the facade.
-        def _noop(path):
-            self.model.loadStatesFromFile(path)
+        """
+        Restore the facade. Nothing is loaded into RAM.
+        """
+        def _load(path: str):
+            try:
+                with open(path, "rb") as f:
+                    _ = pickle.load(f)  # kept for compatibility; optional
+            except Exception:
+                pass
+
+            # facade may be lazily created by subclasses; if present, let it no-op load.
+            if self.model:
+                try:
+                    self.model.loadStatesFromFile(path)
+                except Exception:
+                    pass
             return self.model
-        return _noop
+        return _load
 
 
 class ReinventNetwork(ReinventAlgorithm):
     name = "ReinventNet"
-    # No algorithm-level hyperparameters here; your TrainingStrategy (ReinventNetTraining)
-    # already holds epochs/batch sizes compatible with REINVENT 4.x.
 
     def __init__(self, builder, callback=None):
         super().__init__(builder, callback)
-        # get the facade that knows how to run REINVENT and where artifacts live
+        # builder.instance is a ReinventNet (Django model) which returns the CLI facade
         self._model = self.builder.instance.getModel()
 
     def fit(self, X=None, y=None):
-        """
-        Delegate to the facade. It will:
-          - self.builder.instance.prepareData()
-          - self.builder.instance.run_transfer_learning()
-          - store a training log to AUX ModelFile
-        """
-        # ensure we hold a fresh wrapper and just call its fit()
+        # Refresh facade (safe in case builder.instance mutated)
         self._model = self.builder.instance.getModel()
-        self._model.fit()
-        # record progress stage end (builder’s monitor)
+
+        # Triggers: prepareData() + run_transfer_learning() (subprocess)
+        self._model.fit(X=X, y=y)
+
+        # Inform pipeline that "an epoch-like thing happened"
         if self.callback:
             self.callback(None)
+
+        return self

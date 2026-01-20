@@ -30,6 +30,7 @@ classifiers = [
 ]
 dependencies = [
     'celery',
+    'polars',
     'chembl_webresource_client',
     'django',
     'django-celery-results',
@@ -52,6 +53,7 @@ dependencies = [
     'django-celery-model @ git+https://github.com/martin-sicho/django-celery-model.git@1f606293e959960bdd769e5760140b83f609801a',
     'django-rdkit @ git+https://github.com/rdkit/django-rdkit.git',
     'chembl_structure_pipeline',
+    'reinvent @git+https://github.com/fadeev19190/REINVENT4.git',
     'nvgpu'
 ]
 

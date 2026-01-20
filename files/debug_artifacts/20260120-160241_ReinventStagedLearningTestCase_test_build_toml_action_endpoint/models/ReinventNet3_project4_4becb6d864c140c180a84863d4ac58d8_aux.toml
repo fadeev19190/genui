@@ -1,0 +1,14 @@
+run_type = "transfer_learning"
+device = "cpu"
+tb_logdir = "/Users/artemfadeev/diplom/genui/files/media_debug/models/tb_TL_3"
+
+[parameters]
+num_epochs = 2
+save_every_n_epochs = 1
+batch_size = 16
+sample_batch_size = 100
+
+input_model_file = "/Users/artemfadeev/diplom/genui/files/checkpoints/prior/reinvent.prior"
+smiles_file = "/Users/artemfadeev/diplom/genui/files/media_debug/models/ReinventNet3_project4_4c8ef78901cd41b882193a083b138268_aux.smi"
+validation_smiles_file = "/Users/artemfadeev/diplom/genui/files/media_debug/models/ReinventNet3_project4_5bf196bec35243738d0dd0c064f6e6ec_aux.smi"
+output_model_file = "/Users/artemfadeev/diplom/genui/files/media_debug/models/ReinventNet3_project4_24b949713f424c9da9d8ad71e16de32a_aux.model"

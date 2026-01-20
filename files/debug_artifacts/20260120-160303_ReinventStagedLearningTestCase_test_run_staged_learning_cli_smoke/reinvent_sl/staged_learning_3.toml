@@ -1,0 +1,62 @@
+run_type = "staged_learning"
+device = "cpu"
+tb_logdir = "/Users/artemfadeev/diplom/genui/files/media_debug/tb_rl"
+json_out_config = "_staged_learning.json"
+
+[parameters]
+use_checkpoint = false
+summary_csv_prefix = "reinvent"
+prior_file = "/Users/artemfadeev/diplom/genui/files/media_debug/models/ReinventNet5_project6_4c517cf5ff23485ea268d1dde3d6a6b1_aux.model"
+agent_file = "/Users/artemfadeev/diplom/genui/files/media_debug/models/ReinventNet5_project6_4c517cf5ff23485ea268d1dde3d6a6b1_aux.model"
+batch_size = 16
+unique_sequences = true
+randomize_smiles = true
+tb_isim = false
+
+[learning_strategy]
+type = "dap"
+sigma = 64.0
+rate = 0.0005
+
+[[stage]]
+chkpt_file = "/Users/artemfadeev/diplom/genui/files/media_debug/reinvent_sl/agent_stage0_run3.chkpt"
+termination = "simple"
+max_score = 1.0
+min_steps = 1
+max_steps = 3
+
+[stage.scoring]
+type = "geometric_mean"
+
+[[stage.scoring.component]]
+[stage.scoring.component.custom_alerts]
+[[stage.scoring.component.custom_alerts.endpoint]]
+name = "unwanted_alerts"
+weight = 1.0
+params.smarts = [
+  "[*;r8]",
+  "[*;r9]",
+  "[*;r10]",
+  "[*;r11]",
+  "[*;r12]",
+  "[*;r13]",
+  "[*;r14]",
+  "[*;r15]",
+  "[*;r16]",
+  "[*;r17]",
+  "[#8][#8]",
+  "[#6;+]",
+  "[#16][#16]",
+  "[#7;!n][S;!$(S(=O)=O)]",
+  "[#7;!n][#7;!n]",
+  "C#C",
+  "C(=[O,S])[O,S]",
+  "[#7;!n][C;!$(C(=[O,N])[N,O])][#16;!s]",
+  "[#7;!n][C;!$(C(=[O,N])[N,O])][#7;!n]",
+  "[#7;!n][C;!$(C(=[O,N])[N,O])][#8;!o]",
+  "[#8;!o][C;!$(C(=[O,N])[N,O])][#16;!s]",
+  "[#8;!o][C;!$(C(=[O,N])[N,O])][#8;!o]",
+  "[#16;!s][C;!$(C(=[O,N])[N,O])][#16;!s]",
+]
+
+

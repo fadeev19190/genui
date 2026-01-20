@@ -70,3 +70,47 @@ def runReinventStagedLearning(self, reinvent_id, device="cuda:0"):
         )
     finally:
         cleanup()
+
+
+@shared_task(name="RunReinventStagedLearning", bind=True, queue="gpu")
+def runReinventStagedLearning(self, reinvent_id, device="cuda:0"):
+    try:
+        instance = models.Reinvent.objects.get(pk=reinvent_id)
+
+        recorder = ProgressRecorder(self)
+        try:
+            recorder.set_progress(0, 3, description="Build TOML")
+        except Exception:
+            pass
+
+        toml_path = instance.run_staged_learning(device=device)
+
+        try:
+            recorder.set_progress(2, 3, description="Finalize")
+        except Exception:
+            pass
+
+        rl_log_path = None
+        try:
+            rl_log_path = instance.agent.get_rl_log_path()
+            if rl_log_path and not os.path.exists(rl_log_path):
+                rl_log_path = None
+        except Exception:
+            rl_log_path = None
+
+        try:
+            recorder.set_progress(3, 3, description="Done")
+        except Exception:
+            pass
+
+        return SimpleNamespace(
+            id=getattr(self.request, "id", None),
+            result={
+                "ReinventRunName": instance.name,
+                "ReinventRunID": instance.id,
+                "toml_path": toml_path,
+                "rl_log_path": rl_log_path,
+            },
+        )
+    finally:
+        cleanup()
