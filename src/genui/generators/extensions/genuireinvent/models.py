@@ -26,9 +26,6 @@ from genui.models.models import Model, ModelFile, TrainingStrategy, ValidationSt
 from genui.projects.models import DataSet
 from genui.generators.models import Generator
 
-from reinvent.runmodes.RL.memories.diversity_filter import DiversityFilter
-import reinvent.runmodes.RL.memories as mem
-
 # ───────────────────────────────────────────────────────────────────────────────
 # Hard-coded prior: adjust this absolute path to your machine if needed.
 # ───────────────────────────────────────────────────────────────────────────────
@@ -481,8 +478,11 @@ class ReinventEnvironmentHelper:
 
     @staticmethod
     def get_diversity_filters():
-        import reinvent.runmodes.RL.memories as mem
-        from reinvent.runmodes.RL.memories.diversity_filter import DiversityFilter
+        try:
+            import reinvent.runmodes.RL.memories as mem
+            from reinvent.runmodes.RL.memories.diversity_filter import DiversityFilter
+        except ModuleNotFoundError:
+            return []
         results = []
 
         for _, modname, _ in pkgutil.walk_packages(mem.__path__, prefix="reinvent.runmodes.RL.memories."):
