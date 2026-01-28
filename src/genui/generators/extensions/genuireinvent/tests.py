@@ -1,40 +1,44 @@
-# --- ADD THESE IMPORTS near the top of your tests.py ---
 import os
-import json
 import shutil
-import datetime
+import tempfile
 import unittest
+from unittest.mock import patch
 
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.urls import reverse
 from django.test import override_settings
+from django.urls import reverse
 
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from genui.qsar.tests import QSARModelInit
 from genui.models.models import Algorithm, AlgorithmMode, ModelFileFormat
+
 from . import models
 
+
 TEST_EPOCHS = 2
-REINVENT_BIN = "/opt/anaconda3/envs/reinvent4/bin/reinvent"  # set to your working reinvent CLI
 
 
 class SetUpReinventMixIn(QSARModelInit):
-    """
-    Minimal setup for creating a ReinventNet via REST (transfer learning),
-    and helpers for staged-learning objects aligned with current schema.
+    """Reusable setup helpers for genuireinvent API/tests.
+
+    Deployment/CI note:
+      - These tests should not depend on an installed REINVENT CLI or on user-specific
+        absolute paths.
+      - We therefore create a temporary MEDIA_ROOT + FILES_DIR and inject a dummy prior
+        and dummy checkpoint files as needed.
     """
 
     @classmethod
     def setUpTestData(cls):
         User = get_user_model()
         cls._admin = User.objects.create_superuser(
-            username="fadeevartem",
-            email="fadeev19190@gmail.com",
-            password="1234",
+            username="admin",
+            email="admin@example.com",
+            password="admin",
         )
 
         cls.mode_generator = AlgorithmMode.objects.get_or_create(name="generator")[0]
@@ -59,65 +63,50 @@ class SetUpReinventMixIn(QSARModelInit):
             self.project.owner = self._admin
             self.project.save()
 
-        os.environ.setdefault("REINVENT_BIN", REINVENT_BIN)
+        # Isolate filesystem writes
+        self._tmp_media = tempfile.TemporaryDirectory(prefix="genuireinvent_media_")
+        self._tmp_files = tempfile.TemporaryDirectory(prefix="genuireinvent_files_")
 
-        repo_files = os.path.abspath(
-            os.path.join(settings.BASE_DIR, os.pardir, os.pardir, "files")
-        )
-        media_debug = os.path.join(repo_files, "media_debug")
-        os.makedirs(media_debug, exist_ok=True)
-        os.makedirs(os.path.join(repo_files, "checkpoints", "prior"), exist_ok=True)
+        self._old_media_root = settings.MEDIA_ROOT
+        self._old_genui_settings = dict(getattr(settings, "GENUI_SETTINGS", {}) or {})
 
-        settings.MEDIA_ROOT = media_debug
-        settings.GENUI_SETTINGS = {**settings.GENUI_SETTINGS, "FILES_DIR": repo_files}
+        settings.MEDIA_ROOT = self._tmp_media.name
+        settings.GENUI_SETTINGS = {**self._old_genui_settings, "FILES_DIR": self._tmp_files.name}
 
-        # Sanity: required prior must exist at the absolute path used by extension model code
-        prior_abs = models.PRIOR_ABS
-        if not os.path.isfile(prior_abs):
-            self.fail(
-                f"Required prior not found at {prior_abs}. "
-                f"Either place it there or change PRIOR_ABS in models.py for tests."
-            )
-
-    # ---------------------------------------------------------------------
-    # Small helpers
-    # ---------------------------------------------------------------------
-    def _snapshot_artifacts(self, label: str):
-        src = settings.MEDIA_ROOT
-        debug_root = os.path.join(
-            os.path.abspath(os.path.join(settings.BASE_DIR, os.pardir, os.pardir)),
-            "files",
-            "debug_artifacts",
-        )
-        os.makedirs(debug_root, exist_ok=True)
-        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        dst = os.path.join(debug_root, f"{stamp}_{self.__class__.__name__}_{label}")
-        os.makedirs(dst, exist_ok=True)
-
-        for dirpath, _, filenames in os.walk(src):
-            rel = os.path.relpath(dirpath, src)
-            outdir = os.path.join(dst, rel if rel != "." else "")
-            os.makedirs(outdir, exist_ok=True)
-            for f in filenames:
-                shutil.copy2(os.path.join(dirpath, f), os.path.join(outdir, f))
-
-        print(f"[SNAPSHOT] Copied artifacts to: {dst}")
+        # Provide a dummy prior path for TOML generation
+        self._old_env_prior = os.environ.get("REINVENT_PRIOR")
+        prior_path = os.path.join(self._tmp_files.name, "checkpoints", "prior", "reinvent.prior")
+        os.makedirs(os.path.dirname(prior_path), exist_ok=True)
+        with open(prior_path, "wb") as fh:
+            fh.write(b"DUMMY PRIOR\n")
+        os.environ["REINVENT_PRIOR"] = prior_path
 
     def tearDown(self):
+        # Restore settings/env to avoid leaking state to other tests
+        settings.MEDIA_ROOT = self._old_media_root
+        settings.GENUI_SETTINGS = self._old_genui_settings
+
+        if self._old_env_prior is None:
+            os.environ.pop("REINVENT_PRIOR", None)
+        else:
+            os.environ["REINVENT_PRIOR"] = self._old_env_prior
+
         try:
-            self._snapshot_artifacts(self._testMethodName)
+            self._tmp_media.cleanup()
         finally:
+            self._tmp_files.cleanup()
             super().tearDown()
 
-    def _create_reinvent_net(self, url, initial=None):
-        """
-        POST a ReinventNet (transfer learning). Returns DB instance.
-        """
+    # ---------------------------------------------------------------------
+    # Helpers
+    # ---------------------------------------------------------------------
+    def _create_reinvent_net(self, url, initial=None, *, build=False):
+        """POST a ReinventNet via REST. Returns DB instance."""
         payload = {
             "name": "Test Reinvent Network (pretraining)" if not initial else "Test Reinvent Network (finetuning)",
             "description": "test description",
             "project": self.project.id,
-            "build": True,
+            "build": bool(build),  # IMPORTANT: tests should not require REINVENT CLI
             "trainingStrategy": {
                 "algorithm": Algorithm.objects.get(name="ReinventNet").id,
                 "mode": AlgorithmMode.objects.get(name="generator").id,
@@ -136,6 +125,42 @@ class SetUpReinventMixIn(QSARModelInit):
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED, msg=resp.data)
         return models.ReinventNet.objects.get(pk=resp.data["id"])
 
+    def _write_text(self, path: str, text: str) -> None:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+    def _ensure_net_artifacts(self, net: models.ReinventNet):
+        """Create the minimum on-disk artifacts required for staged-learning TOML.
+
+        We intentionally do NOT call reinvent.datapipeline or the reinvent CLI.
+        """
+        # Minimal SMILES content
+        smiles = []
+        try:
+            smiles = list(getattr(self.molset, "allSmiles", []) or [])
+        except Exception:
+            smiles = []
+        if not smiles:
+            smiles = ["CCO", "CCN", "c1ccccc1"]
+
+        train = "\n".join(smiles[: max(1, len(smiles) - 1)]) + "\n"
+        valid = "\n".join(smiles[-1:]) + "\n"
+        full = train + valid
+
+        self._write_text(net.corpusTrainFile.path, train)
+        self._write_text(net.corpusValidFile.path, valid)
+        self._write_text(net.corpusFullFile.path, full)
+        self._write_text(net.corpusPreviewFile.path, "\n".join(smiles[:3]) + "\n")
+
+        # Dummy checkpoint so ReinventEnvironment.get_*_path works
+        ckpt_path = net.checkpointFile.path
+        os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
+        with open(ckpt_path, "wb") as fh:
+            fh.write(b"DUMMY CHECKPOINT\n")
+
+        return net.checkpointFile
+
     # ---------------------------------------------------------------------
     # Schema-aligned creation helpers (post-migrations)
     # ---------------------------------------------------------------------
@@ -145,12 +170,6 @@ class SetUpReinventMixIn(QSARModelInit):
         return model_cls.objects.create(**filtered)
 
     def _ensure_dataset_links(self, model_cls, kwargs: dict) -> dict:
-        """
-        For DataSet/ActivitySet-derived models after your migrations:
-          - project is required (projects.models.Project-linked base save())
-          - molecules is required for ActivitySet (your DB error showed molecules_id NOT NULL)
-        Uses introspection, so it won't break on small schema changes.
-        """
         fields = {f.name: f for f in model_cls._meta.get_fields()}
 
         if "project" in fields and "project" not in kwargs:
@@ -166,10 +185,6 @@ class SetUpReinventMixIn(QSARModelInit):
         return kwargs
 
     def _get_builder_model(self):
-        """
-        Your DB table is models_model, so the app label is usually 'models'.
-        Try common names used across GenUI versions.
-        """
         for app_label in ("models", "genui_models", "genui"):
             for cls_name in ("Builder", "ModelBuilder"):
                 try:
@@ -179,15 +194,10 @@ class SetUpReinventMixIn(QSARModelInit):
         raise RuntimeError("Could not locate Builder model (tried Builder/ModelBuilder).")
 
     def _create_builder_for(self, *, model_class_name: str):
-        """
-        Create a Builder row that satisfies NOT NULL constraints, using introspection.
-        This fixes: IntegrityError null value in column 'builder_id' of relation 'models_model'.
-        """
         Builder = self._get_builder_model()
 
         kwargs = {}
         for f in Builder._meta.fields:
-            # Skip PK / auto fields
             if getattr(f, "primary_key", False):
                 continue
             if getattr(f, "auto_created", False):
@@ -218,12 +228,8 @@ class SetUpReinventMixIn(QSARModelInit):
                 if rel_name == "AlgorithmMode":
                     kwargs[f.name] = self.mode_generator
                     continue
-
-                # If we don't know, we can't auto-create safely.
-                # Most Builder schemas won't require unknown FK here.
                 continue
 
-            # Scalars / choices
             if getattr(f, "choices", None):
                 kwargs[f.name] = f.choices[0][0]
                 continue
@@ -247,18 +253,11 @@ class SetUpReinventMixIn(QSARModelInit):
             elif internal == "JSONField":
                 kwargs[f.name] = {}
             else:
-                # last resort for unknown required fields
                 kwargs[f.name] = "test"
 
         return Builder.objects.create(**kwargs)
 
     def _create_model_like(self, model_cls, **kwargs):
-        """
-        Create Model/Generator-derived rows after migrations:
-          - ensure project
-          - ensure builder
-          - ensure algorithm/mode when present (best-effort)
-        """
         fields = {f.name: f for f in model_cls._meta.get_fields()}
 
         if "project" in fields and "project" not in kwargs:
@@ -280,12 +279,6 @@ class SetUpReinventMixIn(QSARModelInit):
         return self._create_with_model_fields(model_cls, **kwargs)
 
     def _create_strategy_like(self, model_cls, *, model_instance, **kwargs):
-        """
-        TrainingStrategy-derived rows after migrations:
-          - modelInstance is NOT NULL
-          - algorithm/mode often NOT NULL
-        We intentionally use model_instance=net to avoid circular creation with ReinventAgent.
-        """
         fields = {f.name: f for f in model_cls._meta.get_fields()}
 
         if "modelInstance" in fields and "modelInstance" not in kwargs:
@@ -308,21 +301,14 @@ class SetUpReinventMixIn(QSARModelInit):
     CELERY_TASK_EAGER_PROPAGATES=True,
 )
 class ReinventStagedLearningTestCase(SetUpReinventMixIn, APITestCase):
-    """
-    Post-migrations staged-learning tests aligned with genuireinvent/models.py:
-      - DataSet/ActivitySet required fields
-      - TrainingStrategy.modelInstance required
-      - Model.builder required
-    """
+    """Staged-learning tests that validate TOML schema and endpoints."""
 
     def _mk_scheme_env_agent_gen(self, net: models.ReinventNet, *, add_diversity=False):
-        # Reward scheme is ActivitySet => requires project+molecules
         scheme = self._create_dataset_like(
             models.ReinventEnvironmentScores,
             aggregation_type="geometric_mean",
         )
 
-        # At least one component so scoring exists
         models.UnwantedSmartsScorer.objects.create(
             name="unwanted_alerts",
             weight=1.0,
@@ -340,7 +326,6 @@ class ReinventStagedLearningTestCase(SetUpReinventMixIn, APITestCase):
                 penalty_multiplier=0.5,
             )
 
-        # Environment is DataSet => requires project+molecules
         env = self._create_dataset_like(
             models.ReinventEnvironment,
             name="Test RL Environment",
@@ -350,7 +335,6 @@ class ReinventStagedLearningTestCase(SetUpReinventMixIn, APITestCase):
             reward_scheme=scheme,
         )
 
-        # TrainingStrategy requires modelInstance => use net (avoids circular dependency)
         train_cfg = self._create_strategy_like(
             models.ReinventAgentTraining,
             model_instance=net,
@@ -366,7 +350,6 @@ class ReinventStagedLearningTestCase(SetUpReinventMixIn, APITestCase):
             rate=0.0005,
         )
 
-        # ReinventAgent is Model => requires builder (helper injects it)
         agent = self._create_model_like(
             models.ReinventAgent,
             name="Test Reinvent Agent",
@@ -379,7 +362,6 @@ class ReinventStagedLearningTestCase(SetUpReinventMixIn, APITestCase):
             json_out_config="_staged_learning.json",
         )
 
-        # Reinvent is Generator (usually Model-derived) => also may require builder
         gen = self._create_model_like(
             models.Reinvent,
             name="Test Staged Learning Run",
@@ -390,29 +372,13 @@ class ReinventStagedLearningTestCase(SetUpReinventMixIn, APITestCase):
 
         return scheme, env, agent, gen
 
-    def _ensure_net_checkpoint(self, net: models.ReinventNet):
-        """
-        Make sure the net has an actual checkpoint file on disk.
-        Depending on your build pipeline, the checkpoint may exist only after TL runs.
-        """
-        # Prepare split/corpus first (needed for TL toml)
-        net.prepareData()
-
-        # Run TL once to ensure checkpoint exists and is non-empty
-        out = net.run_transfer_learning(device="cpu")
-        self.assertTrue(os.path.isfile(out), f"Expected TL checkpoint at {out}")
-        self.assertTrue(os.path.getsize(out) > 0, f"Checkpoint is empty at {out}")
-
-        return net.checkpointFile
-
     def test_build_staged_learning_toml_schema_correct(self):
-        net = self._create_reinvent_net(reverse("reinvent-net-list"))
-        ckpt_mf = self._ensure_net_checkpoint(net)
+        net = self._create_reinvent_net(reverse("reinvent-net-list"), build=False)
+        ckpt_mf = self._ensure_net_artifacts(net)
         self.assertTrue(os.path.isfile(ckpt_mf.path))
 
         scheme, env, agent, gen = self._mk_scheme_env_agent_gen(net, add_diversity=True)
 
-        # One stage, inline scoring using scheme
         models.ReinventStage.objects.create(
             generator=gen,
             order=0,
@@ -429,52 +395,45 @@ class ReinventStagedLearningTestCase(SetUpReinventMixIn, APITestCase):
 
         cfg = open(toml_path, "r", encoding="utf-8").read()
 
-        # Top-level (from ReinventAgent.build_staged_toml)
         self.assertIn('run_type = "staged_learning"', cfg)
         self.assertIn('device = "cpu"', cfg)
         self.assertIn('tb_logdir = "', cfg)
         self.assertIn('json_out_config = "_staged_learning.json"', cfg)
 
-        # Parameters section
         self.assertIn("[parameters]", cfg)
         self.assertIn("use_checkpoint = false", cfg)
         self.assertIn('summary_csv_prefix = "reinvent"', cfg)
-        self.assertIn('prior_file = "', cfg)  # env.get_prior_path()
-        self.assertIn('agent_file = "', cfg)  # env.get_agent_path()
+        self.assertIn('prior_file = "', cfg)
+        self.assertIn('agent_file = "', cfg)
         self.assertIn("batch_size = 16", cfg)
 
-        # Learning strategy
         self.assertIn("[learning_strategy]", cfg)
         self.assertIn('type = "dap"', cfg)
         self.assertIn("sigma = 64.0", cfg)
         self.assertIn("rate = 0.0005", cfg)
 
-        # Diversity filter exists
         self.assertIn("[diversity_filter]", cfg)
         self.assertIn('type = "ScaffoldSimilarity"', cfg)
         self.assertIn("bucket_size = 10", cfg)
         self.assertIn("minscore = 0.4", cfg)
         self.assertIn("minsimilarity = 0.4", cfg)
 
-        # Stage layout
         self.assertIn("[[stage]]", cfg)
         self.assertIn('chkpt_file = "', cfg)
         self.assertIn('termination = "simple"', cfg)
         self.assertIn("min_steps = 1", cfg)
         self.assertIn("max_steps = 10", cfg)
 
-        # Inline scoring block
         self.assertIn("[stage.scoring]", cfg)
         self.assertIn('type = "geometric_mean"', cfg)
 
-        # UnwantedSmarts scorer block
         self.assertIn("[stage.scoring.component.custom_alerts]", cfg)
         self.assertIn('name = "unwanted_alerts"', cfg)
         self.assertIn("params.smarts = [", cfg)
 
     def test_build_toml_action_endpoint(self):
-        net = self._create_reinvent_net(reverse("reinvent-net-list"))
-        _ = self._ensure_net_checkpoint(net)
+        net = self._create_reinvent_net(reverse("reinvent-net-list"), build=False)
+        _ = self._ensure_net_artifacts(net)
 
         scheme, env, agent, gen = self._mk_scheme_env_agent_gen(net, add_diversity=False)
 
@@ -503,14 +462,27 @@ class ReinventStagedLearningTestCase(SetUpReinventMixIn, APITestCase):
         self.assertIn("[[stage]]", cfg)
         self.assertIn("[stage.scoring]", cfg)
 
-    @unittest.skipUnless(
-        (os.environ.get("REINVENT_BIN") and os.path.isfile(os.environ.get("REINVENT_BIN")))
-        or shutil.which("reinvent"),
-        "REINVENT CLI not available (set REINVENT_BIN or ensure `reinvent` is on PATH).",
-    )
-    def test_run_staged_learning_cli_smoke(self):
-        net = self._create_reinvent_net(reverse("reinvent-net-list"))
-        _ = self._ensure_net_checkpoint(net)
+    @patch("genui.generators.extensions.genuireinvent.models.subprocess.Popen", autospec=True)
+    def test_run_staged_learning_cli_smoke(self, popen_mock):
+        """
+        Unit test: do NOT run the real REINVENT binary.
+        We only verify:
+          - TOML is produced
+          - subprocess output is logged
+          - non-zero exit raises RuntimeError
+        """
+
+        class _FakeProc:
+            def __init__(self, *args, **kwargs):
+                self.stdout = ["fake reinvent output\n"]
+
+            def wait(self):
+                return 1  # simulate failure
+
+        popen_mock.return_value = _FakeProc()
+
+        net = self._create_reinvent_net(reverse("reinvent-net-list"), build=False)
+        _ = self._ensure_net_artifacts(net)
 
         scheme, env, agent, gen = self._mk_scheme_env_agent_gen(net, add_diversity=False)
 
@@ -525,12 +497,16 @@ class ReinventStagedLearningTestCase(SetUpReinventMixIn, APITestCase):
             scoring_scheme=scheme,
         )
 
-        toml_path = gen.run_staged_learning(device="cpu")
-        self.assertTrue(os.path.isfile(toml_path))
+        # Ensure run_staged_learning doesn't fail before Popen due to missing binary
+        # (it checks settings.REINVENT_BIN / env / shutil.which("reinvent"))
+        fake_bin = shutil.which("python") or shutil.which("bash") or "/bin/echo"
+        with override_settings(REINVENT_BIN=fake_bin):
+            with self.assertRaises(RuntimeError):
+                gen.run_staged_learning(device="cpu")
 
-        # RL log is written by ReinventAgent.run_staged_learning
+        # Log should be written even on failure
         log_path = agent.get_rl_log_path()
         self.assertTrue(os.path.isfile(log_path))
         log_txt = open(log_path, "r", encoding="utf-8").read()
         self.assertIn("[CMD]", log_txt)
-        self.assertTrue(len(log_txt.strip()) > 0)
+        self.assertIn("fake reinvent output", log_txt)

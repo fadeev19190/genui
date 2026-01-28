@@ -26,10 +26,38 @@ from genui.models.models import Model, ModelFile, TrainingStrategy, ValidationSt
 from genui.projects.models import DataSet
 from genui.generators.models import Generator
 
-# ───────────────────────────────────────────────────────────────────────────────
-# Hard-coded prior: adjust this absolute path to your machine if needed.
-# ───────────────────────────────────────────────────────────────────────────────
-PRIOR_ABS = "/Users/artemfadeev/diplom/genui/files/checkpoints/prior/reinvent.prior"
+
+DEFAULT_PRIOR_REL = os.path.join("checkpoints", "prior", "reinvent.prior")
+
+def _resolve_reinvent_prior_path() -> str:
+    candidates = []
+    candidates.append(getattr(settings, "REINVENT_PRIOR_PATH", None))
+    try:
+        candidates.append(getattr(settings, "GENUI_SETTINGS", {}).get("REINVENT_PRIOR_PATH"))
+    except Exception:
+        candidates.append(None)
+    candidates.append(os.environ.get("REINVENT_PRIOR"))
+
+    files_dir = None
+    try:
+        files_dir = getattr(settings, "GENUI_SETTINGS", {}).get("FILES_DIR")
+    except Exception:
+        files_dir = None
+    if files_dir:
+        candidates.append(os.path.join(files_dir, DEFAULT_PRIOR_REL))
+
+    tried = [c for c in candidates if c]
+    for c in tried:
+        if os.path.isfile(c):
+            return c
+
+    raise FileNotFoundError(
+        "REINVENT prior not found. Tried: "
+        + ", ".join(tried or ["<no candidates>"])
+        + ". Configure REINVENT_PRIOR (env) or REINVENT_PRIOR_PATH (settings), "
+        + "or place the prior at "
+        + (os.path.join(files_dir, DEFAULT_PRIOR_REL) if files_dir else "<FILES_DIR>/" + DEFAULT_PRIOR_REL)
+    )
 
 _BEST_EPOCH_RE = re.compile(
     r"Best\s+validation\s+loss\s*\(\s*(?P<loss>[-+]?(\d+(\.\d+)?|\.\d+))\s*\)\s*was\s*at\s*epoch\s*(?P<epoch>\d+)",
@@ -81,8 +109,6 @@ def _overwrite_filefield(mf: ModelFile, data: bytes | str, *, filename: str | No
     mf.file.save(current_rel, ContentFile(data), save=False)
     mf.file.name = current_rel
     mf.save(update_fields=["file"])
-
-
 
 def _bemis_murcko(smiles: str) -> str:
     m = Chem.MolFromSmiles(smiles)
@@ -180,11 +206,9 @@ class ReinventNet(Model):
     def get_clean_corpus_path(self) -> str:
         return self.corpusFullFile.path
 
-    # ── Prior path (hard-coded) ────────────────────────────────────────────────
+    # ── Prior path  ────────────────────────────────────────────────
     def get_prior_path(self) -> str:
-        if not os.path.isfile(PRIOR_ABS):
-            raise FileNotFoundError(f"REINVENT prior not found at: {PRIOR_ABS}")
-        return PRIOR_ABS
+        return _resolve_reinvent_prior_path()
 
     # ── Clean corpus preparation (hashed AUX only) ─────────────────────────────
     def prepareData(self) -> Tuple[ModelFile, ModelFile]:
