@@ -18,7 +18,7 @@ import random
 
 from django.conf import settings
 from django.core.files.base import ContentFile
-from django.db import models
+from django.db import models, close_old_connections
 from django.utils import timezone
 
 from genui.compounds.models import MolSet, ActivitySet
@@ -156,6 +156,7 @@ class ReinventNet(Model):
     CHECKPOINT_FILE_NOTE = "reinvent_tl_checkpoint"   # where REINVENT writes
     CORPUS_TRAIN_NOTE = "reinvent_corpus_train"
     CORPUS_VALID_NOTE = "reinvent_corpus_valid"
+    PRIOR_FILE_NOTE = "reinvent_prior_copy"
 
     molset = models.ForeignKey(MolSet, on_delete=models.CASCADE, null=True)
     parent = models.ForeignKey("self", on_delete=models.CASCADE, null=True)
@@ -207,7 +208,33 @@ class ReinventNet(Model):
         return self.corpusFullFile.path
 
     # ── Prior path  ────────────────────────────────────────────────
+    @property
+    def priorFile(self) -> ModelFile:
+        # stored as an AUX file tied to this model
+        return self._get_or_create_aux(self.PRIOR_FILE_NOTE, f"reinvent_prior_{self.pk}.prior")
+
+    def ensure_prior_copy(self) -> ModelFile:
+        """
+        Make sure this model has its own prior copy (for reproducibility).
+        """
+        src = _resolve_reinvent_prior_path()
+        with open(src, "rb") as f:
+            data = f.read()
+        _overwrite_filefield(self.priorFile, data, filename=os.path.basename(src))
+        return self.priorFile
+
     def get_prior_path(self) -> str:
+        """
+        Prefer the project/model-owned copy if present, else fall back to global.
+        """
+        mf = self.files.filter(kind=ModelFile.AUXILIARY, note=self.PRIOR_FILE_NOTE).first()
+        if mf and mf.file:
+            try:
+                # local storage
+                return mf.file.path
+            except Exception:
+                pass
+        # fallback (global location ensured by genuisetup)
         return _resolve_reinvent_prior_path()
 
     # ── Clean corpus preparation (hashed AUX only) ─────────────────────────────
@@ -547,7 +574,6 @@ class ReinventDiversityFilter(models.Model):
             d["penalty_multiplier"] = self.penalty_multiplier
         return d
 
-# TODO: predelat na Dataset
 class ReinventEnvironment(DataSet):
     name = models.CharField(max_length=255)
 
@@ -749,7 +775,6 @@ class ReinventAgent(Model):
     environment = models.ForeignKey(ReinventEnvironment, on_delete=models.PROTECT)
     training = models.ForeignKey(ReinventAgentTraining, on_delete=models.PROTECT)
     validation = models.ForeignKey(ReinventAgentValidation, null=True, blank=True, on_delete=models.SET_NULL)
-    #TODO pouzit Models aby dedilo logiku
     output_model = models.ForeignKey(ModelFile, null=True, blank=True, on_delete=models.SET_NULL)
 
     # moved from Generator (keep defaults to avoid breaking existing configs)

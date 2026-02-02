@@ -28,6 +28,7 @@ class ReinventNetBuilder(bases.ProgressMixIn, bases.ModelBuilder):
 
     def __init__(self, instance: ReinventNet, initial: ReinventNet = None, progress=None):
         super().__init__(instance, progress, None)
+        # super().__init__(instance, progress, getattr(instance, "validationStrategy", None))
         self.initial = initial
         self.progressStages.append("Creating Corpus...")
         self.progressStages.append("Corpus Done.")

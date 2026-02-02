@@ -22,6 +22,16 @@ SECRET_KEY = 'euws5ei%zq!@0yyo6ta4^e3whylufayu)26th6869x=ljr44=d' if not 'GENUI_
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
+# REINVENT prior (can be overridden by env vars)
+REINVENT_PRIOR_URL = os.environ.get(
+    "REINVENT_PRIOR_URL",
+    "https://zenodo.org/records/15641297/files/reinvent.prior?download=1",
+)
+REINVENT_PRIOR_MD5 = os.environ.get(
+    "REINVENT_PRIOR_MD5",
+    "f268eb072f4fca69ca9434768d3cd461",
+)
+
 # Application definition
 
 SITE_ID = 1
@@ -49,7 +59,7 @@ INSTALLED_APPS = ([
     'celery_progress',
     'django_rdkit',
     'rest_framework_extensions',
-    'genui.generators.extensions.genuireinvent.apps.GenuiReinventConfig',
+    "genui.generators.extensions.genuireinvent",
 ] + GENUI_SETTINGS['APPS'])
 
 

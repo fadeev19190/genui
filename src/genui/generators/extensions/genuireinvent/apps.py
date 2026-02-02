@@ -1,7 +1,7 @@
+# genui/src/genui/generators/extensions/genuireinvent/apps.py
+
 from django.apps import AppConfig
 
-class GenuiReinventConfig(AppConfig):
-    default_auto_field = "django.db.models.BigAutoField"
+
+class GenuireinventConfig(AppConfig):
     name = "genui.generators.extensions.genuireinvent"
-    label = "genuireinvent"
-    verbose_name = "GenUI REINVENT Integration"

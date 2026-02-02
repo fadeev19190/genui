@@ -12,7 +12,10 @@ from .torchutils import cleanup
 
 @shared_task(name="BuildReinventModel", bind=True, queue="gpu")
 def buildReinventModel(self, model_id, builder_class, model_class):
-    close_old_connections()
+    # Celery workers should not keep stale DB connections around.
+    # Use close_old_connections (not close_all) so tasks can also run eagerly
+    # in-process during tests without blowing away the TestCase transaction.
+    # close_old_connections()
     try:
         model_cls = getattr(models, model_class)
         instance = model_cls.objects.get(pk=model_id)
@@ -34,12 +37,12 @@ def buildReinventModel(self, model_id, builder_class, model_class):
         }
     finally:
         cleanup()
-        close_old_connections()
+        # close_old_connections()
 
 
 @shared_task(name="RunReinventStagedLearning", bind=True, queue="gpu")
 def runReinventStagedLearning(self, reinvent_id, device="cuda:0"):
-    close_old_connections()
+    # close_old_connections()
     try:
         instance = models.Reinvent.objects.get(pk=reinvent_id)
 
@@ -74,4 +77,4 @@ def runReinventStagedLearning(self, reinvent_id, device="cuda:0"):
         }
     finally:
         cleanup()
-        close_old_connections()
+        # close_old_connections()

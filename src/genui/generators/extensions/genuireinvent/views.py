@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+from django.db import close_old_connections
+
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -183,6 +185,7 @@ class ReinventViewSet(viewsets.ModelViewSet):
         reinvent = self.get_object()
         device = request.data.get("device", "cuda:0")
         try:
+            # close_old_connections()
             async_res = runReinventStagedLearning.delay(reinvent.id, device=device)
             return Response(
                 {"task_id": async_res.id, "reinvent_id": reinvent.id, "device": device},
