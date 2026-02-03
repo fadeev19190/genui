@@ -1,5 +1,4 @@
 # genui/src/genui/generators/extensions/genuireinvent/apps.py
-
 from django.apps import AppConfig
 
 

@@ -1,3 +1,10 @@
 from django.contrib import admin
+from . import models
 
-# Register your models here.
+@admin.register(models.ReinventNet)
+class ReinventNetAdmin(admin.ModelAdmin):
+    pass
+
+@admin.register(models.ReinventAgent)
+class ReinventAgentAdmin(admin.ModelAdmin):
+    pass

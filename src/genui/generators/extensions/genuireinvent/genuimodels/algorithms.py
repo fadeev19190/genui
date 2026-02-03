@@ -27,7 +27,9 @@ class ReinventAlgorithm(bases.Algorithm, ABC):
     def getFileFormats(cls, attach_to=None):
         pkg, _ = ModelFileFormat.objects.get_or_create(
             fileExtension=".pkg",
-            description="Serialized metadata for REINVENT (e.g., produced checkpoint path).",
+            defaults={
+                "description": "Serialized metadata for REINVENT (e.g., produced checkpoint path).",
+            },
         )
         if attach_to:
             cls.attachToInstance(attach_to, [pkg], attach_to.fileFormats)

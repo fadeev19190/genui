@@ -21,5 +21,4 @@ router.register(r'metrics', views.GeneratorMetricsViewSet, basename='generator_m
 
 urlpatterns = [
     path('', include(router.urls)),
-    path('', include('genui.generators.extensions.genuireinvent.urls')),
 ] + discover_extensions_urlpatterns(GeneratorsConfig.name)
