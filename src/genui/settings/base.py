@@ -49,7 +49,6 @@ INSTALLED_APPS = ([
     'celery_progress',
     'django_rdkit',
     'rest_framework_extensions',
-    # "genui.generators.extensions.genuireinvent",
 ] + GENUI_SETTINGS['APPS'])
 
 
