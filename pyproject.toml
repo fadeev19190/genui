@@ -30,6 +30,7 @@ classifiers = [
 ]
 dependencies = [
     'celery',
+    'polars',
     'chembl_webresource_client',
     'django',
     'django-celery-results',
