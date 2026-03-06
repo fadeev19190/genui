@@ -45,6 +45,8 @@ def runReinventStagedLearning(self, reinvent_id, device="cuda:0"):
     # close_old_connections()
     try:
         instance = models.Reinvent.objects.get(pk=reinvent_id)
+        print(f"[TASK] runReinventStagedLearning: Reinvent ID={instance.id}, Project={instance.project_id}")
+        print(f"[TASK] Agent ID={instance.agent_id}")
 
         recorder = ProgressRecorder(self)
         for (cur, desc) in [(0, "Build TOML"), (2, "Finalize")]:
@@ -53,11 +55,13 @@ def runReinventStagedLearning(self, reinvent_id, device="cuda:0"):
             except Exception:
                 pass
 
+        print(f"[TASK] Calling instance.run_staged_learning(device={device})")
         toml_path = instance.run_staged_learning(device=device)
+        print(f"[TASK] Completed. toml_path={toml_path}")
 
         rl_log_path = None
         try:
-            rl_log_path = instance.agent.get_rl_log_path()
+            rl_log_path = instance.agent.get_rl_log_path(generator=instance)
             if rl_log_path and not os.path.exists(rl_log_path):
                 rl_log_path = None
         except Exception:

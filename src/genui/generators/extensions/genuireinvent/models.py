@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 from typing import Tuple
 import re
+import csv
 
 from rdkit import Chem
 from rdkit.Chem.Scaffolds import MurckoScaffold
@@ -597,8 +598,17 @@ class ReinventEnvironment(DataSet):
         null=True, blank=True
     )
 
+    # Reward scheme aggregation type (directly stored, no separate model needed)
+    aggregation_type = models.CharField(
+        max_length=64,
+        choices=[
+            ("geometric_mean", "Geometric Mean (Balanced - all scores must be good)"),
+            ("arithmetic_mean", "Arithmetic Mean (Flexible - based on weights)"),
+        ],
+        default="geometric_mean"
+    )
+
     diversity_filter = models.ForeignKey(ReinventDiversityFilter, null=True, blank=True, on_delete=models.SET_NULL)
-    reward_scheme = models.ForeignKey("ReinventEnvironmentScores", null=True, blank=True, on_delete=models.SET_NULL)
 
     inception_smiles = models.ForeignKey(ModelFile, null=True, blank=True, on_delete=models.SET_NULL)
     inception_memory_size = models.IntegerField(default=0)
@@ -620,6 +630,204 @@ class ReinventEnvironment(DataSet):
 
 
 # =====================================================================
+# REINVENT4 TRANSFORM UTILITIES
+# =====================================================================
+
+# Default transforms keyed by REINVENT4 property component name.
+# These are auto-applied when no custom transform is specified.
+REINVENT4_TRANSFORM_DEFAULTS = {
+    # ── QED (0-1, want high) ─────────────────────────────────────────────
+    "Qed":               {"type": "sigmoid",        "low": 0.5,  "high": 0.9,  "k": 0.5},
+    # ── Lipophilicity (want 0-5, optimal ~1-4) ───────────────────────────
+    # window=5 → coef_si = 200/(0.15*5) ≈ 25 for smooth transition
+    "SlogP":             {"type": "double_sigmoid",  "low": 0.0,  "high": 5.0,  "coef_div": 100.0, "coef_si": 25.0, "coef_se": 25.0},
+    # ── Molecular weight (want 150-500) ──────────────────────────────────
+    # window=350 → coef_si = 200/(0.15*350) ≈ 4 for smooth transition
+    "MolecularWeight":   {"type": "double_sigmoid",  "low": 150.0,"high": 500.0,"coef_div": 100.0, "coef_si": 4.0,  "coef_se": 4.0},
+    # ── TPSA (want < 140) ────────────────────────────────────────────────
+    "TPSA":              {"type": "reverse_sigmoid", "low": 0.0,  "high": 140.0,"k": 0.5},
+    # ── H-bond acceptors (want ≤ 10) ─────────────────────────────────────
+    "HBondAcceptors":    {"type": "reverse_sigmoid", "low": 0.0,  "high": 10.0, "k": 0.5},
+    # ── H-bond donors (want ≤ 5) ─────────────────────────────────────────
+    "HBondDonors":       {"type": "reverse_sigmoid", "low": 0.0,  "high": 5.0,  "k": 0.5},
+    # ── Rotatable bonds (want ≤ 10) ──────────────────────────────────────
+    "NumRotBond":        {"type": "reverse_sigmoid", "low": 0.0,  "high": 10.0, "k": 0.5},
+    # ── Csp3 (want high, > 0.3) ──────────────────────────────────────────
+    "Csp3":              {"type": "sigmoid",         "low": 0.2,  "high": 0.8,  "k": 0.5},
+    # ── Ring counts (want 1-4) ────────────────────────────────────────────
+    # window=3 → coef_si = 200/(0.15*3) ≈ 45 for smooth transition
+    "NumRings":          {"type": "double_sigmoid",  "low": 1.0,  "high": 4.0,  "coef_div": 100.0, "coef_si": 45.0, "coef_se": 45.0},
+    "NumAromaticRings":  {"type": "double_sigmoid",  "low": 0.0,  "high": 3.0,  "coef_div": 100.0, "coef_si": 45.0, "coef_se": 45.0},
+    "LargestRingSize":   {"type": "reverse_sigmoid", "low": 3.0,  "high": 8.0,  "k": 0.5},
+    # ── SAScore (1–10, lower is better) ──────────────────────────────────
+    "SAScore":           {"type": "reverse_sigmoid", "low": 1.0,  "high": 6.0,  "k": 0.5},
+    # ── Tanimoto distance/similarity (want > 0.4) ────────────────────────
+    "TanimotoSimilarity":{"type": "sigmoid",         "low": 0.3,  "high": 0.8,  "k": 0.5},
+    "TanimotoDistance":  {"type": "sigmoid",         "low": 0.3,  "high": 0.8,  "k": 0.5},
+    # ── Substructure (0 or 1 binary) ─────────────────────────────────────
+    "MatchingSubstructure": {"type": "right_step",   "low": 0.5,  "high": 0.5},
+    "GroupCount":        {"type": "double_sigmoid",  "low": 1.0,  "high": 5.0,  "coef_div": 100.0, "coef_si": 45.0, "coef_se": 45.0},
+    # ── Atom counts ──────────────────────────────────────────────────────
+    # window=20 → coef_si = 200/(0.15*20) ≈ 67 for ~15% transition
+    "NumHeavyAtoms":     {"type": "double_sigmoid",  "low": 10.0, "high": 40.0, "coef_div": 100.0, "coef_si": 6.7, "coef_se": 6.7},
+    # window=5 → coef_si ≈ 25
+    "NumHeteroAtoms":    {"type": "double_sigmoid",  "low": 1.0,  "high": 6.0,  "coef_div": 100.0, "coef_si": 45.0, "coef_se": 45.0},
+    # ── Aliphatic rings (want 0-3) ───────────────────────────────────────
+    "NumAliphaticRings": {"type": "double_sigmoid",  "low": 0.0,  "high": 3.0,  "coef_div": 100.0, "coef_si": 45.0, "coef_se": 45.0},
+    # ── Stereocenters (want 0-3, fewer is easier to synthesise) ─────────
+    "NumAtomSteroCenters": {"type": "reverse_sigmoid", "low": 0.0, "high": 3.0, "k": 0.5},
+}
+
+# Human-readable metadata for each transform type (for API / UI)
+REINVENT4_TRANSFORM_META = {
+    "sigmoid": {
+        "label": "Sigmoid",
+        "description": "Smooth S-curve: reward rises from 0→1 as value passes from `low` to `high`.",
+        "params": {
+            "low":  {"type": "number", "title": "Low (x where output ≈ 0.05)", "default": 0.0},
+            "high": {"type": "number", "title": "High (x where output ≈ 0.95)", "default": 1.0},
+            "k":    {"type": "number", "title": "Steepness k", "default": 0.5, "min": 0.01, "max": 10.0},
+        },
+    },
+    "reverse_sigmoid": {
+        "label": "Reverse Sigmoid",
+        "description": "Smooth S-curve inverted: reward falls from 1→0 as value passes from `low` to `high`.",
+        "params": {
+            "low":  {"type": "number", "title": "Low (x where output ≈ 0.95)", "default": 0.0},
+            "high": {"type": "number", "title": "High (x where output ≈ 0.05)", "default": 1.0},
+            "k":    {"type": "number", "title": "Steepness k", "default": 0.5, "min": 0.01, "max": 10.0},
+        },
+    },
+    "double_sigmoid": {
+        "label": "Double Sigmoid (Hump)",
+        "description": "Bell-shaped curve: reward peaks between `low` and `high`, falls off on both sides.",
+        "params": {
+            "low":      {"type": "number", "title": "Low boundary", "default": 0.0},
+            "high":     {"type": "number", "title": "High boundary", "default": 1.0},
+            "coef_div": {"type": "number", "title": "coef_div (scale factor)", "default": 100.0},
+            "coef_si":  {"type": "number", "title": "coef_si (left steepness)", "default": 150.0},
+            "coef_se":  {"type": "number", "title": "coef_se (right steepness)", "default": 150.0},
+        },
+    },
+    "right_step": {
+        "label": "Right Step",
+        "description": "Returns 1.0 for values ≥ `high`, 0.0 otherwise.",
+        "params": {
+            "low":  {"type": "number", "title": "Low (unused)", "default": 0.0},
+            "high": {"type": "number", "title": "Threshold (step point)", "default": 0.5},
+        },
+    },
+    "left_step": {
+        "label": "Left Step",
+        "description": "Returns 1.0 for values ≤ `low`, 0.0 otherwise.",
+        "params": {
+            "low":  {"type": "number", "title": "Threshold (step point)", "default": 0.5},
+            "high": {"type": "number", "title": "High (unused)", "default": 1.0},
+        },
+    },
+    "step": {
+        "label": "Step (Window)",
+        "description": "Returns 1.0 for values in [low, high], 0.0 outside.",
+        "params": {
+            "low":  {"type": "number", "title": "Low bound", "default": 0.0},
+            "high": {"type": "number", "title": "High bound", "default": 1.0},
+        },
+    },
+    "exponential_decay": {
+        "label": "Exponential Decay",
+        "description": "exp(-k·x) for x≥0, clipped to 1.0 for x<0. Penalises large positive values.",
+        "params": {
+            "k": {"type": "number", "title": "Decay rate k", "default": 1.0, "min": 0.001},
+        },
+    },
+}
+
+
+def compute_transform_values(transform_dict: dict, x_values: list) -> list:
+    """
+    Apply a REINVENT4 transform to a list of x values.
+    Returns list of float outputs in [0, 1].
+    """
+    import numpy as np
+
+    t = dict(transform_dict)
+    t_type = t.get("type", "sigmoid").lower().replace("_", "")
+
+    x = np.array(x_values, dtype=np.float64)
+
+    if t_type == "sigmoid":
+        low = float(t.get("low", 0.0))
+        high = float(t.get("high", 1.0))
+        k = float(t.get("k", 0.5))
+        center = (high + low) / 2.0
+        xc = x - center
+        if (high - low) == 0:
+            k_eff = 10.0 * k
+            y = (k_eff * xc > 0).astype(np.float64)
+        else:
+            k_eff = 10.0 * k / (high - low)
+            h = k_eff * xc * np.log(10)
+            y = np.where(h >= 0,
+                         1.0 / (1.0 + np.exp(-h)),
+                         np.exp(h) / (1.0 + np.exp(h)))
+        return y.tolist()
+
+    elif t_type == "reversesigmoid":
+        low = float(t.get("low", 0.0))
+        high = float(t.get("high", 1.0))
+        k = float(t.get("k", 0.5))
+        center = (high + low) / 2.0
+        xc = x - center
+        if (high - low) == 0:
+            k_eff = 10.0 * k
+            y = (k_eff * xc > 0).astype(np.float64)
+        else:
+            k_eff = 10.0 * k / (high - low)
+            h = k_eff * xc * np.log(10)
+            y = np.where(h >= 0,
+                         1.0 / (1.0 + np.exp(-h)),
+                         np.exp(h) / (1.0 + np.exp(h)))
+        return (1.0 - y).tolist()
+
+    elif t_type == "doublesigmoid":
+        from reinvent.scoring.transforms.sigmoid_functions import double_sigmoid
+        low = float(t.get("low", 0.0))
+        high = float(t.get("high", 1.0))
+        coef_div = float(t.get("coef_div", 100.0))
+        # Default coef_si/coef_se to a window-proportional value so preview is never invisible.
+        # Transition width ≈ 2*coef_div/coef_si; we want ~15% of window by default.
+        window = abs(high - low) or 1.0
+        auto_coef = max(0.5, round(2.0 * coef_div / (0.15 * window), 1))
+        coef_si = float(t.get("coef_si", auto_coef))
+        coef_se = float(t.get("coef_se", auto_coef))
+        # double_sigmoid(x, x_left, x_right, k, k_left, k_right)
+        # where x_left=low, x_right=high, k=coef_div, k_left=coef_si, k_right=coef_se
+        y = double_sigmoid(x, low, high, coef_div, coef_si, coef_se)
+        return y.tolist()
+
+    elif t_type == "rightstep":
+        high = float(t.get("high", 0.5))
+        return [1.0 if v >= high else 0.0 for v in x_values]
+
+    elif t_type == "leftstep":
+        low = float(t.get("low", 0.5))
+        return [1.0 if v <= low else 0.0 for v in x_values]
+
+    elif t_type == "step":
+        low = float(t.get("low", 0.0))
+        high = float(t.get("high", 1.0))
+        return [1.0 if low <= v <= high else 0.0 for v in x_values]
+
+    elif t_type == "exponentialdecay":
+        k = float(t.get("k", 1.0))
+        y = np.where(x < 0, 1.0, np.exp(-k * x))
+        return y.tolist()
+
+    # Fallback: identity
+    return x_values
+
+
+# =====================================================================
 # SCORING
 # =====================================================================
 
@@ -634,16 +842,6 @@ class ScoreModifier(DataSet):
 
 
 
-# TODO: dat do Environmentu
-class ReinventEnvironmentScores(ActivitySet):
-    aggregation_type = models.CharField(
-        max_length=64,
-        choices=[
-            ("geometric_mean", "geometric_mean"),
-            ("weighted_arithmetic_mean", "weighted_arithmetic_mean"),
-        ]
-    )
-
 class ClippedScore(ScoreModifier):
     """
     Mirrors DrugEx.modifiers.ClippedScore / SmoothClippedScore configuration,
@@ -656,26 +854,31 @@ class ClippedScore(ScoreModifier):
     smooth = models.BooleanField(null=False, default=False)
 
     def to_reinvent_transform(self) -> dict:
-        # Keep your existing transform mapping logic, now per-class.
         if not self.smooth:
-            # "clipped" effect via double sigmoid window
+            # Hard clipped effect via double sigmoid window
             return {
                 "type": "double_sigmoid",
                 "low": float(self.lower),
                 "high": float(self.upper),
-                "coef_div": float(self.upper - self.lower),
+                "coef_div": float(self.upper - self.lower) if self.upper != self.lower else 1.0,
                 "coef_si": 20,
                 "coef_se": 20,
             }
 
-        # smooth=True -> gentler boundary (your earlier mapping)
-        span = float(self.upper - self.lower)
-        k = 1.0 / (span + 1e-9)
+        # smooth=True → REINVENT reverse_sigmoid
+        # Semantics: raw scores near `high` → reward ≈ 1,
+        #            raw scores near `low`  → reward ≈ 0.
+        # k controls steepness of the sigmoid curve (0.1 = gentle, 1.0 = steep).
+        # We derive k from the `high` and `low` output fields:
+        #   high/low ∈ [0, 1] in the UI.  Use (1 - high + low) clamped to
+        #   a sensible range as the "softness" knob: when high=1,low=0
+        #   → k=0.25 (smooth); when high=0.9,low=0.1 → k=0.45 (steeper).
+        k = max(0.05, (1.0 - float(self.high) + float(self.low)) + 0.25)
         return {
             "type": "reverse_sigmoid",
             "low": float(self.lower),
             "high": float(self.upper),
-            "k": float(k),
+            "k": round(k, 6),
         }
 
 
@@ -688,21 +891,24 @@ class SmoothHump(ScoreModifier):
     sigma = models.FloatField(null=False, default=0.5)
 
     def to_reinvent_transform(self) -> dict:
-        # Your earlier mapping
+        coef_div = float(self.upper - self.lower) if self.upper != self.lower else 1.0
         return {
             "type": "double_sigmoid",
             "low": float(self.lower),
             "high": float(self.upper),
-            "coef_div": float(self.upper - self.lower),
+            "coef_div": coef_div,
             "coef_si": int(float(self.sigma) * 20),
             "coef_se": int(float(self.sigma) * 20),
         }
 
 
 class ScoringMethod(models.Model):
+    project = models.ForeignKey(
+        "projects.Project", on_delete=models.CASCADE,
+        null=True, blank=True, related_name="+"
+    )
     name = models.CharField(max_length=255)
     weight = models.FloatField(default=1.0)
-    scheme = models.ForeignKey("ReinventEnvironmentScores", on_delete=models.CASCADE, related_name="%(class)s_set")
     modifier = models.ForeignKey("ScoreModifier", null=True, blank=True, on_delete=models.SET_NULL)
 
     class Meta:
@@ -712,9 +918,15 @@ class ScoringMethod(models.Model):
         mod = getattr(self, "modifier", None)
         if not mod:
             return None
-        # If ScoreModifier is base, try to downcast via reverse relations
+        # If ScoreModifier is base, try to downcast via reverse relations.
+        # Polymorphic reverse OneToOne lookups raise DoesNotExist (not
+        # AttributeError) when the child row doesn't exist, so we must
+        # catch that explicitly.
         for attr in ("clippedscore", "smoothhump"):
-            child = getattr(mod, attr, None)
+            try:
+                child = getattr(mod, attr, None)
+            except Exception:
+                child = None
             if child is not None:
                 mod = child
                 break
@@ -724,6 +936,43 @@ class ScoringMethod(models.Model):
 
 class PropertyScorer(ScoringMethod):
     property_name = models.CharField(max_length=64)
+    # Component-level params for REINVENT 4 components that require them.
+    # Stored as JSON, e.g. {"smiles": ["CCO"], "radius": 3, "use_counts": true}
+    component_params = models.JSONField(null=True, blank=True, default=None)
+    # REINVENT4 transform configuration stored as JSON.
+    # e.g. {"type": "sigmoid", "low": 0.0, "high": 1.0, "k": 0.5}
+    # When null, a sensible default transform is auto-applied per property.
+    transform_params = models.JSONField(null=True, blank=True, default=None)
+
+    def build_transform(self) -> dict | None:
+        """
+        Return transform dict for this scorer.
+        Priority:
+          1. Explicit transform_params stored on this instance
+          2. Legacy modifier FK (ClippedScore / SmoothHump)
+          3. Auto-default from REINVENT4_TRANSFORM_DEFAULTS keyed by property_name
+        """
+        # 1) Explicit transform_params
+        if self.transform_params and isinstance(self.transform_params, dict):
+            return dict(self.transform_params)
+
+        # 2) Legacy modifier
+        mod = getattr(self, "modifier", None)
+        if mod:
+            for attr in ("clippedscore", "smoothhump"):
+                try:
+                    child = getattr(mod, attr, None)
+                except Exception:
+                    child = None
+                if child is not None:
+                    mod = child
+                    break
+            fn = getattr(mod, "to_reinvent_transform", None)
+            if callable(fn):
+                return fn()
+
+        # 3) Auto-default by property name
+        return dict(REINVENT4_TRANSFORM_DEFAULTS.get(self.property_name, {})) or None
 
 class GenUIModelScorer(ScoringMethod):
     model = models.ForeignKey(Model, on_delete=models.PROTECT)
@@ -740,6 +989,7 @@ class UnwantedSmartsScorer(ScoringMethod):
         model or file if needed.
         """
         return UNWANTED_SMARTS_DEFAULT
+
 
 
 # =====================================================================
@@ -772,7 +1022,7 @@ class ReinventAgentValidation(ValidationStrategy):
 
 
 class ReinventAgent(Model):
-    environment = models.ForeignKey(ReinventEnvironment, on_delete=models.PROTECT)
+    environment = models.ForeignKey(ReinventEnvironment, on_delete=models.CASCADE)
     training = models.ForeignKey(ReinventAgentTraining, on_delete=models.PROTECT)
     validation = models.ForeignKey(ReinventAgentValidation, null=True, blank=True, on_delete=models.SET_NULL)
     output_model = models.ForeignKey(ModelFile, null=True, blank=True, on_delete=models.SET_NULL)
@@ -785,6 +1035,10 @@ class ReinventAgent(Model):
         # Mirrors DrugExAgent.getGenerator()
         return self.generator.order_by("-id").first()
 
+    def _run_tag(self, gen) -> str:
+        project_id = getattr(gen, "project_id", None)
+        return f"project{project_id}_run{gen.pk}" if project_id else f"run{gen.pk}"
+
     # ------------------------------------------------------------------
     # Simple file helpers for staged learning
     # ------------------------------------------------------------------
@@ -792,40 +1046,116 @@ class ReinventAgent(Model):
         base = getattr(settings, "MEDIA_ROOT", ".")
         return os.path.join(base, "reinvent_sl")
 
-    def get_toml_path(self) -> str:
-        gen = self.getGenerator()
+    def get_toml_path(self, generator=None) -> str:
+        gen = generator or self.getGenerator()
         if not gen:
             raise RuntimeError("This ReinventAgent is not attached to a Reinvent generator.")
-        return os.path.join(self._sl_dir(), f"staged_learning_{gen.pk}.toml")
+        run_tag = self._run_tag(gen)
+        return os.path.join(self._sl_dir(), f"staged_learning_{run_tag}.toml")
 
-    def get_rl_log_path(self) -> str:
-        gen = self.getGenerator()
+    def get_rl_log_path(self, generator=None) -> str:
+        gen = generator or self.getGenerator()
         if not gen:
             raise RuntimeError("This ReinventAgent is not attached to a Reinvent generator.")
-        return os.path.join(self._sl_dir(), f"reinvent_rl_{gen.pk}.log")
+        run_tag = self._run_tag(gen)
+        return os.path.join(self._sl_dir(), f"reinvent_rl_{run_tag}.log")
+
+    def _results_prefix(self, gen) -> str:
+        base = getattr(self.training, "summary_csv_prefix", None) or "reinvent"
+        run_tag = self._run_tag(gen)
+        return f"{base}_{run_tag}" if run_tag else base
+
+    def get_csv_path(self, generator=None) -> str:
+        """Resolve the staged-learning CSV path for this run.
+
+        REINVENT writes one CSV per stage: {prefix}_1.csv, {prefix}_2.csv, …
+        We want the **latest** stage (highest suffix number) because it
+        contains the final RL results the user cares about.
+        """
+        gen = generator or self.getGenerator()
+        if not gen:
+            raise RuntimeError("This ReinventAgent is not attached to a Reinvent generator.")
+        sl_dir = self._sl_dir()
+        prefix = self._results_prefix(gen)
+        legacy_prefix = getattr(self.training, "summary_csv_prefix", None) or "reinvent"
+
+        import glob
+
+        def _latest_numbered(pfx):
+            """Return the CSV with the highest stage-number suffix, or None."""
+            pattern = os.path.join(sl_dir, f"{pfx}_*.csv")
+            matches = glob.glob(pattern)
+            if not matches:
+                return None
+            # Extract the numeric suffix and pick the highest
+            def _stage_num(p):
+                base = os.path.basename(p)          # e.g. reinvent_project5_run43_2.csv
+                stem = base.rsplit(".", 1)[0]        # reinvent_project5_run43_2
+                parts = stem.rsplit("_", 1)          # ['reinvent_project5_run43', '2']
+                try:
+                    return int(parts[-1])
+                except (ValueError, IndexError):
+                    return 0
+            matches.sort(key=_stage_num, reverse=True)
+            return matches[0]
+
+        # 1) Try numbered CSVs with the run-specific prefix (latest stage)
+        latest = _latest_numbered(prefix)
+        if latest:
+            return latest
+
+        # 2) Plain (un-numbered) file
+        plain = os.path.join(sl_dir, f"{prefix}.csv")
+        if os.path.isfile(plain):
+            return plain
+
+        # 3) Fallback: legacy prefix
+        latest_legacy = _latest_numbered(legacy_prefix)
+        if latest_legacy:
+            return latest_legacy
+        plain_legacy = os.path.join(sl_dir, f"{legacy_prefix}.csv")
+        if os.path.isfile(plain_legacy):
+            return plain_legacy
+
+        # 4) Last resort: newest CSV matching prefix by mtime
+        try:
+            matches = glob.glob(os.path.join(sl_dir, f"{prefix}*.csv"))
+            if not matches:
+                matches = glob.glob(os.path.join(sl_dir, f"{legacy_prefix}*.csv"))
+            if matches:
+                matches.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+                return matches[0]
+        except Exception:
+            pass
+
+        return os.path.join(sl_dir, f"{prefix}.csv")
 
     # ------------------------------------------------------------------
     # Build staged-learning TOML
     # ------------------------------------------------------------------
-    def build_staged_toml(self, device="cuda:0") -> str:
-        gen = self.getGenerator()
+    def build_staged_toml(self, device="cuda:0", generator=None) -> str:
+        gen = generator or self.getGenerator()
         if not gen:
             raise RuntimeError("This ReinventAgent is not attached to a Reinvent generator.")
 
         env = self.environment
         train_cfg = self.training
 
+        # Generate unique tb_logdir with project and run IDs
+        run_tag = self._run_tag(gen)
+        tb_dir_path = os.path.join(self._sl_dir(), f"tb_logs_{run_tag}")
+
         lines = []
         lines.append('run_type = "staged_learning"')
         lines.append(f'device = "{device}"')
-        lines.append(f'tb_logdir = "{self.tb_logdir}"')
+        lines.append(f'tb_logdir = "{tb_dir_path}"')
         lines.append(f'json_out_config = "{self.json_out_config}"')
         lines.append("")
 
         # PARAMETERS
         lines.append("[parameters]")
         lines.append(f"use_checkpoint = {str(train_cfg.use_checkpoint).lower()}")
-        lines.append(f'summary_csv_prefix = "{train_cfg.summary_csv_prefix}"')
+        lines.append(f'summary_csv_prefix = "{self._results_prefix(gen)}"')
 
         # NOTE: model selection now supports Model OR ModelFile
         lines.append(f'prior_file = "{env.get_prior_path()}"')
@@ -865,15 +1195,20 @@ class ReinventAgent(Model):
         # STAGES
         stages = list(gen.stages.order_by("order"))
         if not stages:
-            raise RuntimeError("Staged learning requires at least one stage.")
+            raise RuntimeError(
+                "This run has no stages defined. "
+                "Go to the Multi-Stage Learning tab, select this run, "
+                "assign scoring components, and create at least one stage."
+            )
 
         sl_dir = self._sl_dir()
         os.makedirs(sl_dir, exist_ok=True)
+        run_tag = self._run_tag(gen)
 
-        for st in stages:
+        for stage_idx, st in enumerate(stages):
             lines.append("[[stage]]")
 
-            default_chkpt = os.path.join(sl_dir, f"agent_stage{st.order}_run{gen.pk}.chkpt")
+            default_chkpt = os.path.join(sl_dir, f"agent_stage{st.order}_{run_tag}.chkpt")
             chkpt_path = st.resolve_checkpoint_path(default_chkpt)
             lines.append(f'chkpt_file = "{chkpt_path}"')
 
@@ -887,35 +1222,159 @@ class ReinventAgent(Model):
 
             # EXTERNAL SCORING FILE
             if st.scoring_source == "file":
-                scheme = st.scoring_scheme
-                if not scheme:
-                    raise RuntimeError("Stage requires scoring_scheme when scoring_source='file'.")
                 if not st.scoring_file:
                     raise RuntimeError("Stage scoring_source='file' but scoring_file is not set.")
-
+                agg = st.aggregation_type or "geometric_mean"
                 lines.append(f"[{prefix}]")
-                lines.append(f'type = "{scheme.aggregation_type}"')
+                lines.append(f'type = "{agg}"')
                 lines.append(f'filename = "{st.scoring_file.file.path}"')
                 lines.append('filetype = "toml"')
                 lines.append("")
                 continue
 
-            # INLINE SCORING
-            scheme = st.scoring_scheme or env.reward_scheme
-            if not scheme:
-                raise RuntimeError("Inline scoring requires stage scoring_scheme or environment.reward_scheme.")
+            # INLINE SCORING — use stage aggregation_type (defaults to geometric_mean)
+            agg = st.aggregation_type or "geometric_mean"
+
+            # Every stage automatically gets the default custom_alerts
+            # component, so there is always at least one scoring component.
 
             lines.append(f"[{prefix}]")
-            lines.append(f'type = "{scheme.aggregation_type}"')
+            lines.append(f'type = "{agg}"')
             lines.append("")
 
-            for ps in PropertyScorer.objects.filter(scheme=scheme).order_by("id"):
-                prop = ps.property_name
+            # Translate any legacy / RDKit-style property names stored in the DB
+            # to the canonical REINVENT 4 component names from Table 2.
+            # Keys  = names that may exist in old PropertyScorer.property_name rows.
+            # Values = correct component names recognised by REINVENT 4 (case-
+            #          insensitive lookup, but we use canonical capitalisation).
+            _PROP_NAME_MAP = {
+                # ── QED ─────────────────────────────────────────────────
+                "QED": "Qed",
+                "qed": "Qed",
+                # ── Lipophilicity ────────────────────────────────────────
+                "MolLogP": "SlogP",
+                "logP": "SlogP",
+                "LogP": "SlogP",
+                # ── Molecular weight ─────────────────────────────────────
+                "MolWt": "MolecularWeight",
+                "MW": "MolecularWeight",
+                "mol_weight": "MolecularWeight",
+                # ── HBond donors / acceptors ─────────────────────────────
+                "NumHDonors": "HBondDonors",
+                "NumHAcceptors": "HBondAcceptors",
+                # ── Rotatable bonds ──────────────────────────────────────
+                "NumRotatableBonds": "NumRotBond",
+                # ── Rings — old RDKit names that have no direct equivalent
+                #    are mapped to the closest valid REINVENT 4 component ──
+                "NumSaturatedRings":       "NumRings",
+                "NumAromaticHeterocycles": "NumAromaticRings",
+                "NumAliphaticHeterocycles":"NumAliphaticRings",
+                "NumSaturatedHeterocycles":"NumRings",
+                "NumAromaticCarbocycles":  "NumAromaticRings",
+                "NumAliphaticCarbocycles": "NumAliphaticRings",
+                "NumSaturatedCarbocycles": "NumRings",
+                # ── sp hybridisation ────────────────────────────────────
+                # REINVENT 4 registers these lowercase (numsp, numsp2, numsp3)
+                "Numsp":  "numsp",
+                "Numsp2": "numsp2",
+                "Numsp3": "numsp3",
+                # ── Stereocenters ────────────────────────────────────────
+                "NumStereocenters":    "NumAtomStereoCenters",
+                "NumStereoCenters":    "NumAtomStereoCenters",
+                "num_stereocenters":   "NumAtomStereoCenters",
+                # ── Graph / topology ─────────────────────────────────────
+                "graph_length": "GraphLength",
+                # ── sp3 fraction ─────────────────────────────────────────
+                "FractionCSP3": "Csp3",
+                "FCsp3":        "Csp3",
+                # ── New atom/ring counts ──────────────────────────────────────
+                "HeavyAtomCount":       "NumHeavyAtoms",
+                "num_heavy_atoms":      "NumHeavyAtoms",
+                "NumHeteroatoms":       "NumHeteroAtoms",
+                "num_heteroatoms":      "NumHeteroAtoms",
+                "NumAliphRings":        "NumAliphaticRings",
+                "num_aliphatic_rings":  "NumAliphaticRings",
+                "NumAtomStereoCenters": "NumAtomSteroCenters",
+                "num_stereo_centers":   "NumAtomSteroCenters",
+            }
+
+            # Default component_params for REINVENT 4 components that
+            # require endpoint-level params.  When the user has not supplied
+            # explicit values we fall back to these sensible defaults so the
+            # TOML is always valid.
+            # IMPORTANT: REINVENT's collect_params() aggregates per-
+            # endpoint param values into lists. That means every value
+            # written here must be a **scalar** (string / int / bool)
+            # because collect_params will wrap it in a list.
+            #
+            # The ONE exception is TanimotoSimilarity/Distance where the
+            # Pydantic field is List[List[str]] for smiles, so the
+            # endpoint-level value must already be a list of strings
+            # (collect_params wraps it into the outer list).
+            _COMPONENT_DEFAULT_PARAMS = {
+                "TanimotoSimilarity": {
+                    "smiles": ["c1ccccc1"],   # List[str] → collect_params → List[List[str]]
+                    "radius": 3,
+                    "use_counts": True,
+                    "use_features": False,
+                },
+                "TanimotoDistance": {
+                    "smiles": ["c1ccccc1"],   # List[str] → collect_params → List[List[str]]
+                    "radius": 3,
+                    "use_counts": True,
+                    "use_features": False,
+                },
+                "GroupCount": {
+                    "smarts": "[#6]",         # scalar → collect_params → List[str]
+                },
+                "MatchingSubstructure": {
+                    "smarts": "[#6]",         # scalar → collect_params → List[str]
+                    "use_chirality": False,
+                },
+                "PMI": {
+                    "property": "npr1",       # scalar → collect_params → List[str]
+                },
+            }
+
+            # Property scorers attached to this stage
+            for ps in st.property_scorers.order_by("id"):
+                prop = _PROP_NAME_MAP.get(ps.property_name, ps.property_name)
                 lines.append(f"[[{prefix}.component]]")
                 lines.append(f"[{prefix}.component.{prop}]")
                 lines.append(f"[[{prefix}.component.{prop}.endpoint]]")
                 lines.append(f'name = "{ps.name}"')
                 lines.append(f"weight = {ps.weight}")
+
+                # Emit component_params as endpoint-level params.
+                # Merge user-supplied params over defaults so required
+                # fields are always present.
+                defaults = _COMPONENT_DEFAULT_PARAMS.get(prop, {})
+                cparams = dict(defaults)  # start with defaults
+                if ps.component_params and isinstance(ps.component_params, dict):
+                    cparams.update(ps.component_params)  # user overrides
+
+                if cparams:
+                    # Keys whose endpoint-level value must remain a list
+                    # (because the Pydantic field is List[List[...]]).
+                    _LIST_KEYS = {"smiles"}
+
+                    for pk, pv in cparams.items():
+                        # Unwrap single-element lists for params that
+                        # should be scalar.  collect_params() will wrap
+                        # them back into a list later.
+                        if (isinstance(pv, list) and len(pv) == 1
+                                and pk not in _LIST_KEYS):
+                            pv = pv[0]
+
+                        if isinstance(pv, list):
+                            items = ", ".join(f'"{x}"' if isinstance(x, str) else str(x) for x in pv)
+                            lines.append(f"params.{pk} = [{items}]")
+                        elif isinstance(pv, bool):
+                            lines.append(f"params.{pk} = {str(pv).lower()}")
+                        elif isinstance(pv, str):
+                            lines.append(f'params.{pk} = "{pv}"')
+                        else:
+                            lines.append(f"params.{pk} = {pv}")
 
                 tr = ps.build_transform()
                 if tr:
@@ -924,30 +1383,62 @@ class ReinventAgent(Model):
                         lines.append(f'{k} = "{v}"' if isinstance(v, str) else f"{k} = {v}")
                 lines.append("")
 
-            for us in UnwantedSmartsScorer.objects.filter(scheme=scheme).order_by("id"):
+            # QSAR model scorers attached to this stage
+            for ms in st.model_scorers.order_by("id"):
+                lines.append(f"[[{prefix}.component]]")
+                lines.append(f"[{prefix}.component.qsar_models]")
+                lines.append(f"[[{prefix}.component.qsar_models.endpoint]]")
+                lines.append(f'name = "{ms.name}"')
+                lines.append(f"weight = {ms.weight}")
+                tr = ms.build_transform()
+                if tr:
+                    lines.append(f"[{prefix}.component.qsar_models.endpoint.transform]")
+                    for k, v in tr.items():
+                        lines.append(f'{k} = "{v}"' if isinstance(v, str) else f"{k} = {v}")
+                lines.append("")
+
+            # SMARTS scorers attached to this stage (user-defined UnwantedSmartsScorer)
+            has_user_smarts = False
+            for us in st.smarts_scorers.order_by("id"):
                 if not us.enabled:
                     continue
+                has_user_smarts = True
                 patterns = us.load_patterns()
 
                 lines.append(f"[[{prefix}.component]]")
                 lines.append(f"[{prefix}.component.custom_alerts]")
-
-                # IMPORTANT: endpoint must be a table/dict (array-of-tables is fine)
                 lines.append(f"[[{prefix}.component.custom_alerts.endpoint]]")
                 lines.append(f'name = "{us.name}"')
                 lines.append(f"weight = {us.weight}")
-
-                # IMPORTANT: REINVENT expects params under endpoint, use dotted keys
                 lines.append("params.smarts = [")
                 for p in patterns:
                     lines.append(f'  "{p}",')
                 lines.append("]")
                 lines.append("")
 
+
+            # ── Default bad-SMARTS penalty (first stage only, no user SMARTS) ─
+            # REINVENT applies custom_alerts once per run; including it
+            # only in the first stage avoids redundant duplication.
+            if stage_idx == 0 and not has_user_smarts:
+                _bad_smarts_w = getattr(gen, "bad_smarts_weight", 1.0)
+                if _bad_smarts_w is None:
+                    _bad_smarts_w = 1.0
+                lines.append(f"[[{prefix}.component]]")
+                lines.append(f"[{prefix}.component.custom_alerts]")
+                lines.append(f"[[{prefix}.component.custom_alerts.endpoint]]")
+                lines.append('name = "Unwanted SMARTS (default)"')
+                lines.append(f"weight = {_bad_smarts_w}")
+                lines.append("params.smarts = [")
+                for pat in UNWANTED_SMARTS_DEFAULT:
+                    lines.append(f'  "{pat}",')
+                lines.append("]")
+                lines.append("")
+
             lines.append("")
 
         body = "\n".join(lines) + "\n"
-        toml_path = self.get_toml_path()
+        toml_path = self.get_toml_path(generator=gen)
         with open(toml_path, "w", encoding="utf-8") as fh:
             fh.write(body)
 
@@ -956,8 +1447,15 @@ class ReinventAgent(Model):
     # ------------------------------------------------------------------
     # RUN STAGED LEARNING
     # ------------------------------------------------------------------
-    def run_staged_learning(self, device="cuda:0") -> str:
-        toml_path = self.build_staged_toml(device=device)
+    def run_staged_learning(self, device="cuda:0", generator=None) -> str:
+        gen = generator or self.getGenerator()
+        if not gen:
+            raise RuntimeError("This ReinventAgent is not attached to a Reinvent generator.")
+
+        run_tag = self._run_tag(gen)
+        print(f"[ReinventAgent.run_staged_learning] Generator={gen.id}, ProjectID={gen.project_id}, RunTag={run_tag}")
+
+        toml_path = self.build_staged_toml(device=device, generator=gen)
 
         reinvent_bin = (
             getattr(settings, "REINVENT_BIN", None)
@@ -983,7 +1481,7 @@ class ReinventAgent(Model):
         lines = [ln for ln in (proc.stdout or [])]
         rc = proc.wait()
 
-        log_path = self.get_rl_log_path()
+        log_path = self.get_rl_log_path(generator=gen)
         log_text = f"[CMD] {' '.join(cmd)}\n{''.join(lines)}"
         with open(log_path, "w", encoding="utf-8") as fh:
             fh.write(log_text)
@@ -991,19 +1489,332 @@ class ReinventAgent(Model):
         if rc != 0:
             raise RuntimeError(f"REINVENT staged learning failed (exit {rc}). See log: {log_path}")
 
+        # Persist results CSV into the run's ModelFile (if available)
+        try:
+            csv_path = self.get_csv_path(generator=gen)
+            if os.path.isfile(csv_path):
+                with open(csv_path, "rb") as fh:
+                    data = fh.read()
+                result_file = gen.get_results_file()
+                _overwrite_filefield(result_file, data, filename=os.path.basename(result_file.file.name))
+        except Exception:
+            pass
+
         return toml_path
 
 
 class Reinvent(Generator):
     # keep fields if you already migrated data; frontend can keep using them
-    environment = models.ForeignKey(ReinventEnvironment, on_delete=models.PROTECT)
+    environment = models.ForeignKey(ReinventEnvironment, on_delete=models.CASCADE)
     agent = models.ForeignKey(ReinventAgent, on_delete=models.PROTECT, related_name="generator")
+    bad_smarts_weight = models.FloatField(default=1.0, help_text="Weight for the default bad-SMARTS penalty (0–1)")
+
+    RESULTS_FILE_NOTE = "reinvent_sl_results"
+
+    def _run_tag(self) -> str:
+        return f"project{self.project_id}_run{self.pk}" if self.project_id else f"run{self.pk}"
+
+    def get_results_file(self) -> ModelFile:
+        """Return a ModelFile for staged-learning CSV results."""
+        mf = self.files.filter(kind=ModelFile.AUXILIARY, note=self.RESULTS_FILE_NOTE).first()
+        if mf is None:
+            filename = f"reinvent_{self._run_tag()}.csv"
+            mf = ModelFile.create(
+                self,
+                filename,
+                ContentFile(b""),
+                note=self.RESULTS_FILE_NOTE,
+            )
+        return mf
+
+    def _extract_smiles_from_csv(self, csv_path: str) -> list[str]:
+        """Extract SMILES from CSV file.
+
+        Returns list of SMILES strings.
+        """
+        smiles = []
+        with open(csv_path, "r", encoding="utf-8", newline="") as fh:
+            reader = csv.DictReader(fh)
+            fieldnames = reader.fieldnames or []
+            smiles_key = None
+            for name in fieldnames:
+                if name and name.strip().lower() == "smiles":
+                    smiles_key = name
+                    break
+            if not smiles_key:
+                return smiles
+            for row in reader:
+                val = (row.get(smiles_key) or "").strip()
+                if val:
+                    smiles.append(val)
+        return smiles
+
+    def _extract_smiles_with_scores_from_csv(self, csv_path: str, min_score: float = None) -> list[tuple[str, float]]:
+        """Extract SMILES and scores from CSV file with optional filtering.
+
+        Returns list of tuples (smiles, score).
+
+        This method supports multiple CSV formats:
+        1. REINVENT 4.x format with headers: Agent,Prior,Target,Score,SMILES,SMILES_state,...
+        2. Alternative REINVENT format: step,agent,smiles,score,component1,...
+        3. Legacy format without headers: component1_score,component2_score,...,total_score,SMILES
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        results = []
+        with open(csv_path, "r", encoding="utf-8", newline="") as fh:
+            reader = csv.reader(fh)
+            row_number = 0
+            header_row = None
+            smiles_col_idx = None
+            score_col_idx = None
+
+            for row in reader:
+                row_number += 1
+                if len(row) < 2:
+                    continue
+
+                # Detect header row
+                if row_number == 1:
+                    # Check if first row is a header
+                    if any(h.lower() in ['smiles', 'step', 'agent', 'score'] for h in row):
+                        header_row = [h.lower() for h in row]
+                        # Find SMILES and score columns
+                        # Note: Look for exact column name match first, then check for substring
+                        for idx, h in enumerate(header_row):
+                            h_stripped = h.strip()
+                            # Find SMILES column - prefer exact 'smiles' match over 'smiles_state'
+                            if h_stripped == 'smiles':
+                                smiles_col_idx = idx
+                            # Find score column - prefer exact 'score' match
+                            if h_stripped in ['score', 'total_score', 'avg_score']:
+                                score_col_idx = idx
+                        logger.info(f"[CSV Parse] Detected header row with SMILES column at index {smiles_col_idx}, score at {score_col_idx}")
+                        continue
+
+                try:
+                    smiles = None
+                    total_score = None
+
+                    # Extract SMILES and score based on detected format
+                    if smiles_col_idx is not None and score_col_idx is not None:
+                        # Use detected column indices
+                        if len(row) <= max(smiles_col_idx, score_col_idx):
+                            continue
+                        smiles = row[smiles_col_idx].strip()
+                        total_score = float(row[score_col_idx])
+                    else:
+                        # No header detected - try to auto-detect SMILES column
+                        # SMILES should be a string containing chemical notation
+                        # Scan columns from right to left to find the SMILES column
+                        for idx in range(len(row) - 1, -1, -1):
+                            val = row[idx].strip()
+                            if not val:
+                                continue
+
+                            # Try to identify SMILES by checking for typical characters
+                            if any(c in val for c in ['C', 'N', 'O', 'S', 'c', 'n', 'o', 's', '(', ')', '=', '#', '[', ']']):
+                                # Check if it's not just a number
+                                try:
+                                    float(val)
+                                    continue  # It's a number, not SMILES
+                                except ValueError:
+                                    # Good, it's not a plain number
+                                    smiles = val
+                                    # Score should be in a column before SMILES
+                                    for score_idx in range(idx - 1, -1, -1):
+                                        try:
+                                            total_score = float(row[score_idx])
+                                            break
+                                        except (ValueError, IndexError):
+                                            continue
+                                    break
+
+                        # If still not found, fall back to legacy format: score in second-to-last, SMILES in last
+                        if smiles is None and len(row) >= 2:
+                            try:
+                                total_score = float(row[-2])
+                                smiles = row[-1].strip()
+                            except (ValueError, IndexError):
+                                continue
+
+                    if not smiles or total_score is None:
+                        continue
+
+                    # Validate that SMILES is not just a number (likely an index)
+                    try:
+                        float(smiles)
+                        # If we can convert SMILES to float, it's probably a row index, skip it
+                        if row_number <= 10:  # Only log first 10 warnings
+                            logger.warning(f"[CSV Parse] Row {row_number}: Skipping potential index '{smiles}' instead of SMILES")
+                        continue
+                    except ValueError:
+                        # Good, it's not a plain number, proceed
+                        pass
+
+                    # Basic SMILES validation - should contain typical SMILES characters
+                    if not any(c in smiles for c in ['C', 'N', 'O', 'S', 'c', 'n', 'o', 's', '(', ')', '=', '#']):
+                        if row_number <= 10:  # Only log first 10 warnings
+                            logger.warning(f"[CSV Parse] Row {row_number}: Skipping invalid SMILES '{smiles}'")
+                        continue
+
+                    # Filter by minimum score if specified
+                    if min_score is not None and total_score < min_score:
+                        continue
+
+                    results.append((smiles, total_score))
+                except (ValueError, IndexError) as e:
+                    if row_number <= 10:  # Only log first 10 errors
+                        logger.debug(f"[CSV Parse] Row {row_number}: Failed to parse - {e}")
+                    continue
+
+        return results
+
 
     def build_staged_toml(self, device="cuda:0") -> str:
-        return self.agent.build_staged_toml(device=device)
+        return self.agent.build_staged_toml(device=device, generator=self)
 
     def run_staged_learning(self, device="cuda:0") -> str:
-        return self.agent.run_staged_learning(device=device)
+        return self.agent.run_staged_learning(device=device, generator=self)
+
+    def get(self, n_samples, min_score=None) -> list[str]:
+        """
+        Get n_samples SMILES strings from staged learning results.
+
+        This method is used by the Compounds -> Generated Sets interface
+        to retrieve molecules from the staged learning run results.
+
+        For Reinvent staged learning, molecules are already generated during
+        the run and stored in CSV files. This method reads from those CSV files
+        instead of running new sampling.
+
+        :param n_samples: Number of SMILES to return
+        :param min_score: Optional minimum score threshold for filtering
+        :return: List of SMILES strings
+        """
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.info(f"[Reinvent.get] Getting {n_samples} SMILES from staged learning results (min_score={min_score})")
+
+        # Get the CSV path for this run
+        csv_path = self.agent.get_csv_path(generator=self)
+
+
+        logger.info(f"[Reinvent.get] Reading SMILES from CSV: {csv_path}")
+
+        # Check if file exists and log its size
+        if os.path.exists(csv_path):
+            file_size = os.path.getsize(csv_path)
+            logger.info(f"[Reinvent.get] CSV file size: {file_size} bytes")
+
+            # Log first few lines for debugging
+            try:
+                with open(csv_path, 'r') as f:
+                    first_lines = []
+                    for i in range(5):
+                        line = f.readline()
+                        if not line:
+                            break
+                        first_lines.append(line.strip())
+                    logger.info(f"[Reinvent.get] First {len(first_lines)} lines of CSV:")
+                    for i, line in enumerate(first_lines):
+                        logger.info(f"[Reinvent.get]   Line {i+1}: {line[:200] if len(line) > 200 else line}")
+            except Exception as e:
+                logger.warning(f"[Reinvent.get] Could not read CSV preview: {e}")
+        else:
+            logger.error(f"[Reinvent.get] CSV file does not exist!")
+
+        # Extract SMILES with scores from the CSV file
+        smiles_with_scores = self._extract_smiles_with_scores_from_csv(csv_path, min_score=min_score)
+
+        if not smiles_with_scores:
+            # Get statistics about available scores to help user
+            all_smiles_with_scores = self._extract_smiles_with_scores_from_csv(csv_path, min_score=None)
+
+            if min_score is not None and all_smiles_with_scores:
+                # Calculate score statistics
+                all_scores = [score for _, score in all_smiles_with_scores]
+                max_available = max(all_scores)
+                min_available = min(all_scores)
+                median_score = sorted(all_scores)[len(all_scores) // 2]
+
+                logger.error(
+                    f"[Reinvent.get] No molecules found with score >= {min_score}. "
+                    f"Available score range: {min_available:.4f} to {max_available:.4f} "
+                    f"(median: {median_score:.4f})"
+                )
+
+                raise ValueError(
+                    f"No molecules found with score >= {min_score}. "
+                    f"The highest score in this run is {max_available:.4f}. "
+                    f"Available score range: {min_available:.4f} to {max_available:.4f} (median: {median_score:.4f}). "
+                    f"Please lower the minimum score threshold to at least {max_available:.4f} or less."
+                )
+            else:
+                # No SMILES found at all - CSV is malformed or empty
+                logger.error(
+                    f"[Reinvent.get] No valid SMILES found in CSV file. "
+                    f"The file may be empty, corrupted, or in an unexpected format. "
+                    f"Please check the CSV file at: {csv_path}"
+                )
+                raise ValueError(
+                    f"No SMILES found in CSV file {csv_path}. "
+                    f"The CSV file may be empty or improperly formatted. "
+                    f"Expected format: CSV with 'smiles' and 'score' columns (REINVENT 4.x), "
+                    f"or legacy format with score in second-to-last column and SMILES in last column."
+                )
+
+        logger.info(f"[Reinvent.get] Found {len(smiles_with_scores)} SMILES matching criteria (min_score={min_score})")
+
+        # Check if we have fewer molecules than requested
+        if len(smiles_with_scores) < n_samples:
+            logger.warning(
+                f"[Reinvent.get] Only {len(smiles_with_scores)} molecules available "
+                f"(requested {n_samples}). Returning all available molecules."
+            )
+            if min_score is not None:
+                logger.warning(
+                    f"[Reinvent.get] Consider lowering the score threshold (current: {min_score}) "
+                    f"to get more molecules."
+                )
+
+        # Sort by score descending to get best molecules first
+        smiles_with_scores.sort(key=lambda x: x[1], reverse=True)
+
+        # Log score range
+        if smiles_with_scores:
+            max_score = smiles_with_scores[0][1]
+            min_found_score = smiles_with_scores[-1][1]
+            logger.info(f"[Reinvent.get] Score range: {min_found_score:.4f} to {max_score:.4f}")
+
+        # Extract just the SMILES strings
+        smiles_list = [smi for smi, score in smiles_with_scores]
+
+        # Return requested number of SMILES (or all if fewer available)
+        actual_count = min(len(smiles_list), n_samples)
+        result = smiles_list[:actual_count]
+        logger.info(f"[Reinvent.get] Returning {len(result)} SMILES (requested {n_samples})")
+
+        return result
+
+    def __str__(self):
+        """String representation for the model."""
+        # Try different ways to get a meaningful name
+        name = getattr(self, 'name', None)
+        if name and name.strip():
+            return name
+
+        pk = getattr(self, 'pk', None)
+        project_id = getattr(self, 'project_id', None)
+
+        if pk:
+            if project_id:
+                return f"Reinvent (Project {project_id}, Run {pk})"
+            return f"Reinvent Run {pk}"
+
+        return "Reinvent (unsaved)"
 
 # =====================================================================
 # 6. STAGE MODEL
@@ -1036,10 +1847,14 @@ class ReinventStage(models.Model):
         default="inline"
     )
 
-    scoring_scheme = models.ForeignKey(
-        "ReinventEnvironmentScores",
-        null=True, blank=True,
-        on_delete=models.SET_NULL
+    aggregation_type = models.CharField(
+        max_length=64,
+        choices=[
+            ("geometric_mean", "Geometric Mean (Balanced - all scores must be good)"),
+            ("arithmetic_mean", "Arithmetic Mean (Flexible - based on weights)"),
+        ],
+        default="geometric_mean",
+        null=True, blank=True
     )
 
     scoring_file = models.ForeignKey(
@@ -1047,6 +1862,17 @@ class ReinventStage(models.Model):
         null=True, blank=True,
         on_delete=models.SET_NULL,
         related_name="reinvent_stage_scoring_files"
+    )
+
+    # Scoring components assigned to this stage
+    property_scorers = models.ManyToManyField(
+        "PropertyScorer", blank=True, related_name="stages"
+    )
+    model_scorers = models.ManyToManyField(
+        "GenUIModelScorer", blank=True, related_name="stages"
+    )
+    smarts_scorers = models.ManyToManyField(
+        "UnwantedSmartsScorer", blank=True, related_name="stages"
     )
 
     class Meta:
@@ -1078,3 +1904,4 @@ class ModelPerformanceReinvent(ModelPerformance):
     fraction_valid = models.FloatField(null=True, blank=True)
     avg_nll = models.FloatField(null=True, blank=True)
     unique_scaffolds = models.IntegerField(null=True, blank=True)
+

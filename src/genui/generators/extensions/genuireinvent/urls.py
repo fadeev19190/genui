@@ -15,22 +15,24 @@ router.register(r"reinvent/agents", views.ReinventAgentViewSet)
 router.register(r"reinvent/environments", views.ReinventEnvironmentViewSet)
 
 router.register(r"reinvent/diversity-filters", views.ReinventDiversityFilterViewSet)
-router.register(r"reinvent/score-modifiers", views.ScoreModifierViewSet)
-router.register(r"reinvent/env-schemes", views.ReinventEnvironmentScoresViewSet)
-router.register(r"reinvent/property-scorers", views.PropertyScorerViewSet)
-router.register(r"reinvent/model-scorers", views.GenUIModelScorerViewSet)
-router.register(r"reinvent/unwanted-smarts", views.UnwantedSmartsScorerViewSet)
+router.register(r"reinvent/property-scorers", views.PropertyScorerViewSet, basename="reinvent-property-scorer")
+router.register(r"reinvent/model-scorers", views.GenUIModelScorerViewSet, basename="reinvent-model-scorer")
+router.register(r"reinvent/unwanted-smarts", views.UnwantedSmartsScorerViewSet, basename="reinvent-unwanted-smarts")
 router.register(r"reinvent/agent-training", views.ReinventAgentTrainingViewSet)
 router.register(r"reinvent/agent-validation", views.ReinventAgentValidationViewSet)
 router.register(r"reinvent/runs", views.ReinventViewSet)
 router.register(r"reinvent/stages", views.ReinventStageViewSet)
 router.register(r"reinvent/performance", views.ModelPerformanceReinventViewSet, basename="reinvent-performance")
+router.register(r"reinvent/model-files", views.ReinventModelFileViewSet, basename="reinvent-model-files")
+router.register(r"reinvent/metrics", views.ReinventMetricsViewSet, basename="reinvent-metrics")
 
 routes = [
     path("reinvent/networks/<int:pk>/tasks/all/",ModelTasksView.as_view(model_class=models.ReinventNet)),
     path("reinvent/networks/<int:pk>/tasks/started/",ModelTasksView.as_view(started_only=True, model_class=models.ReinventNet)),
     path("reinvent/networks/<int:pk>/performance/",ModelPerformanceListView.as_view(),name="reinvent_net_perf_view"),
     path("reinvent/networks/<int:pk>/files/",ModelFileView.as_view(model_class=models.ReinventNet),name="reinvent-net-model-files-list"),
+    path("reinvent/runs/<int:pk>/tasks/all/", ModelTasksView.as_view(model_class=models.Reinvent)),
+    path("reinvent/runs/<int:pk>/tasks/started/", ModelTasksView.as_view(started_only=True, model_class=models.Reinvent)),
 ]
 
 urlpatterns = [

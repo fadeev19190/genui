@@ -2,7 +2,6 @@
 import os
 import shutil
 import tempfile
-import unittest
 
 from django.apps import apps
 from django.conf import settings
@@ -17,7 +16,7 @@ from genui.qsar.tests import QSARModelInit
 from genui.models.models import Algorithm, AlgorithmMode, ModelFileFormat
 
 from . import models
-from .tasks import buildReinventModel, runReinventStagedLearning
+from .tasks import runReinventStagedLearning
 
 
 TEST_EPOCHS = 2
@@ -357,21 +356,11 @@ class ReinventTransferLearningIntegrationTests(SetUpReinventMixIn, APITestCase):
     CELERY_TASK_EAGER_PROPAGATES=True,
 )
 class ReinventStagedLearningIntegrationTests(SetUpReinventMixIn, APITestCase):
-    def _mk_scheme_env_agent_gen(self, net: models.ReinventNet, *, add_diversity: bool = False):
-        # Reward scheme (ActivitySet/DataSet-like)
-        scheme = self._create_dataset_like(
-            models.ReinventEnvironmentScores,
-            aggregation_type="geometric_mean",
-        )
+    def _mk_env_agent_gen(self, net: models.ReinventNet, *, add_diversity: bool = False):
+        """Create Environment → AgentTraining → Agent → Reinvent (run).
 
-        # Minimal scoring component so scoring exists
-        models.UnwantedSmartsScorer.objects.create(
-            name="unwanted_alerts",
-            weight=1.0,
-            scheme=scheme,
-            enabled=True,
-        )
-
+        Returns (env, agent, gen).
+        """
         df = None
         if add_diversity:
             df = models.ReinventDiversityFilter.objects.create(
@@ -388,10 +377,9 @@ class ReinventStagedLearningIntegrationTests(SetUpReinventMixIn, APITestCase):
             prior_net=net,
             agent_net=net,
             diversity_filter=df,
-            reward_scheme=scheme,
+            aggregation_type="geometric_mean",
         )
 
-        # TrainingStrategy requires modelInstance (avoid circular dependency by using net)
         train_cfg = self._create_strategy_like(
             models.ReinventAgentTraining,
             model_instance=net,
@@ -427,7 +415,33 @@ class ReinventStagedLearningIntegrationTests(SetUpReinventMixIn, APITestCase):
             agent=agent,
         )
 
-        return scheme, env, agent, gen
+        return env, agent, gen
+
+    def _create_property_scorer(self, *, name="QED_scorer", property_name="Qed",
+                                weight=1.0, project=None):
+        return models.PropertyScorer.objects.create(
+            name=name,
+            property_name=property_name,
+            weight=weight,
+            project=project or self.project,
+        )
+
+    def _create_stage_with_scorers(self, gen, *, order=0, max_steps=5,
+                                    property_scorers=None, aggregation_type="geometric_mean"):
+        """Create a ReinventStage and assign PropertyScorers via M2M."""
+        stage = models.ReinventStage.objects.create(
+            generator=gen,
+            order=order,
+            termination_type="simple",
+            max_score=1.0,
+            min_steps=1,
+            max_steps=max_steps,
+            scoring_source="inline",
+            aggregation_type=aggregation_type,
+        )
+        if property_scorers:
+            stage.property_scorers.set(property_scorers)
+        return stage
 
     def _ensure_net_checkpoint(self, net: models.ReinventNet):
         net.prepareData()
@@ -436,22 +450,15 @@ class ReinventStagedLearningIntegrationTests(SetUpReinventMixIn, APITestCase):
         self.assertGreater(os.path.getsize(ckpt_path), 0)
         return ckpt_path
 
+    # ----- TOML build tests -----
+
     def test_build_staged_toml_action_endpoint(self):
         net, _ = self._create_reinvent_net_via_api(build=False)
         self._ensure_net_checkpoint(net)
 
-        scheme, env, agent, gen = self._mk_scheme_env_agent_gen(net, add_diversity=True)
-
-        models.ReinventStage.objects.create(
-            generator=gen,
-            order=0,
-            termination_type="simple",
-            max_score=1.0,
-            min_steps=1,
-            max_steps=5,
-            scoring_source="inline",
-            scoring_scheme=scheme,
-        )
+        env, agent, gen = self._mk_env_agent_gen(net, add_diversity=True)
+        ps = self._create_property_scorer()
+        self._create_stage_with_scorers(gen, max_steps=5, property_scorers=[ps])
 
         url = reverse("reinvent-build-toml", args=[gen.id])
         resp = self.client.post(url, data={"device": "cpu"}, format="json")
@@ -467,22 +474,107 @@ class ReinventStagedLearningIntegrationTests(SetUpReinventMixIn, APITestCase):
         self.assertIn("[[stage]]", cfg)
         self.assertIn("[stage.scoring]", cfg)
 
+    def test_build_staged_toml_includes_property_scorer(self):
+        """Property scorer assigned to a stage appears in the TOML."""
+        net, _ = self._create_reinvent_net_via_api(build=False)
+        self._ensure_net_checkpoint(net)
+
+        env, agent, gen = self._mk_env_agent_gen(net)
+        ps = self._create_property_scorer(name="logP_test", property_name="SlogP", weight=0.8)
+        self._create_stage_with_scorers(gen, property_scorers=[ps])
+
+        toml_path = gen.build_staged_toml(device="cpu")
+        cfg = open(toml_path, "r", encoding="utf-8").read()
+
+        self.assertIn("SlogP", cfg)
+        self.assertIn('name = "logP_test"', cfg)
+        self.assertIn("weight = 0.8", cfg)
+
+    def test_build_staged_toml_multiple_scorers_on_stage(self):
+        """Multiple property scorers on one stage all appear in the TOML."""
+        net, _ = self._create_reinvent_net_via_api(build=False)
+        self._ensure_net_checkpoint(net)
+
+        env, agent, gen = self._mk_env_agent_gen(net)
+        ps1 = self._create_property_scorer(name="QED_scorer", property_name="Qed", weight=1.0)
+        ps2 = self._create_property_scorer(name="MW_scorer", property_name="MolecularWeight", weight=0.5)
+        self._create_stage_with_scorers(gen, property_scorers=[ps1, ps2])
+
+        toml_path = gen.build_staged_toml(device="cpu")
+        cfg = open(toml_path, "r", encoding="utf-8").read()
+
+        self.assertIn("Qed", cfg)
+        self.assertIn("MolecularWeight", cfg)
+        self.assertIn('name = "QED_scorer"', cfg)
+        self.assertIn('name = "MW_scorer"', cfg)
+
+    def test_build_staged_toml_default_bad_smarts_only_in_first_stage(self):
+        """Default bad SMARTS penalty is included only in stage 0."""
+        net, _ = self._create_reinvent_net_via_api(build=False)
+        self._ensure_net_checkpoint(net)
+
+        env, agent, gen = self._mk_env_agent_gen(net)
+        ps = self._create_property_scorer()
+        self._create_stage_with_scorers(gen, order=0, property_scorers=[ps])
+        self._create_stage_with_scorers(gen, order=1, max_steps=3, property_scorers=[ps])
+
+        toml_path = gen.build_staged_toml(device="cpu")
+        cfg = open(toml_path, "r", encoding="utf-8").read()
+
+        # Should appear exactly once (first stage)
+        count = cfg.count('name = "Unwanted SMARTS (default)"')
+        self.assertEqual(count, 1, f"Expected 1 default bad SMARTS block, found {count}")
+
+    def test_build_staged_toml_respects_bad_smarts_weight(self):
+        """bad_smarts_weight from Reinvent model is reflected in TOML."""
+        net, _ = self._create_reinvent_net_via_api(build=False)
+        self._ensure_net_checkpoint(net)
+
+        env, agent, gen = self._mk_env_agent_gen(net)
+        gen.bad_smarts_weight = 0.7
+        gen.save(update_fields=["bad_smarts_weight"])
+
+        ps = self._create_property_scorer()
+        self._create_stage_with_scorers(gen, property_scorers=[ps])
+
+        toml_path = gen.build_staged_toml(device="cpu")
+        cfg = open(toml_path, "r", encoding="utf-8").read()
+        self.assertIn("weight = 0.7", cfg)
+
+    def test_build_staged_toml_no_stages_raises(self):
+        """build_staged_toml raises when no stages are defined."""
+        net, _ = self._create_reinvent_net_via_api(build=False)
+        self._ensure_net_checkpoint(net)
+
+        env, agent, gen = self._mk_env_agent_gen(net)
+        with self.assertRaises(RuntimeError):
+            gen.build_staged_toml(device="cpu")
+
+    def test_build_staged_toml_aggregation_type_per_stage(self):
+        """Stage-level aggregation_type is used directly in the generated TOML."""
+        net, _ = self._create_reinvent_net_via_api(build=False)
+        self._ensure_net_checkpoint(net)
+
+        env, agent, gen = self._mk_env_agent_gen(net)
+        ps = self._create_property_scorer()
+        self._create_stage_with_scorers(
+            gen, property_scorers=[ps],
+            aggregation_type="arithmetic_mean",
+        )
+
+        toml_path = gen.build_staged_toml(device="cpu")
+        cfg = open(toml_path, "r", encoding="utf-8").read()
+        self.assertIn('type = "arithmetic_mean"', cfg)
+
+    # ----- RL run tests -----
+
     def test_run_staged_learning_via_celery_task_writes_rl_log(self):
         net, _ = self._create_reinvent_net_via_api(build=False)
         self._ensure_net_checkpoint(net)
 
-        scheme, env, agent, gen = self._mk_scheme_env_agent_gen(net, add_diversity=False)
-
-        models.ReinventStage.objects.create(
-            generator=gen,
-            order=0,
-            termination_type="simple",
-            max_score=1.0,
-            min_steps=1,
-            max_steps=3,
-            scoring_source="inline",
-            scoring_scheme=scheme,
-        )
+        env, agent, gen = self._mk_env_agent_gen(net, add_diversity=False)
+        ps = self._create_property_scorer()
+        self._create_stage_with_scorers(gen, max_steps=3, property_scorers=[ps])
 
         # Execute the real task (eager mode => runs inline)
         res = runReinventStagedLearning.delay(gen.id, device="cpu")
@@ -502,18 +594,9 @@ class ReinventStagedLearningIntegrationTests(SetUpReinventMixIn, APITestCase):
         net, _ = self._create_reinvent_net_via_api(build=False)
         self._ensure_net_checkpoint(net)
 
-        scheme, env, agent, gen = self._mk_scheme_env_agent_gen(net, add_diversity=False)
-
-        models.ReinventStage.objects.create(
-            generator=gen,
-            order=0,
-            termination_type="simple",
-            max_score=1.0,
-            min_steps=1,
-            max_steps=3,
-            scoring_source="inline",
-            scoring_scheme=scheme,
-        )
+        env, agent, gen = self._mk_env_agent_gen(net, add_diversity=False)
+        ps = self._create_property_scorer()
+        self._create_stage_with_scorers(gen, max_steps=3, property_scorers=[ps])
 
         url = reverse("reinvent-run-staged-learning", args=[gen.id])
         resp = self.client.post(url, data={"device": "cpu"}, format="json")
@@ -524,3 +607,197 @@ class ReinventStagedLearningIntegrationTests(SetUpReinventMixIn, APITestCase):
         self.assertTrue(os.path.isfile(log_path))
         txt = open(log_path, "r", encoding="utf-8").read()
         self.assertIn("[CMD]", txt)
+
+
+# ---------------------------------------------------------------------
+# Tests: get_csv_path picks latest stage CSV
+# ---------------------------------------------------------------------
+@override_settings(
+    ROOT_URLCONF="genui.urls",
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
+class GetCsvPathTests(SetUpReinventMixIn, APITestCase):
+    def test_get_csv_path_returns_highest_numbered_csv(self):
+        """get_csv_path returns the CSV with the highest stage-number suffix."""
+        net, _ = self._create_reinvent_net_via_api(build=False)
+        self._ensure_net_checkpoint(net)
+
+        env = self._create_dataset_like(
+            models.ReinventEnvironment,
+            name="CSV Path Test Env",
+            prior_net=net,
+            agent_net=net,
+            aggregation_type="geometric_mean",
+        )
+        train_cfg = self._create_strategy_like(
+            models.ReinventAgentTraining,
+            model_instance=net,
+            summary_csv_prefix="reinvent",
+        )
+        agent = self._create_model_like(
+            models.ReinventAgent,
+            name="CSV Path Agent",
+            environment=env,
+            training=train_cfg,
+        )
+        gen = self._create_model_like(
+            models.Reinvent,
+            name="CSV Path Run",
+            environment=env,
+            agent=agent,
+        )
+
+        sl_dir = agent._sl_dir()
+        os.makedirs(sl_dir, exist_ok=True)
+
+        prefix = agent._results_prefix(gen)
+        # Write two fake CSVs: _1 (small) and _2 (larger)
+        csv1 = os.path.join(sl_dir, f"{prefix}_1.csv")
+        csv2 = os.path.join(sl_dir, f"{prefix}_2.csv")
+        with open(csv1, "w") as f:
+            f.write("step,SMILES,Score\n1,CCO,0.5\n")
+        with open(csv2, "w") as f:
+            f.write("step,SMILES,Score\n1,c1ccccc1,0.9\n2,CC(=O)O,0.8\n")
+
+        result = agent.get_csv_path(generator=gen)
+        self.assertEqual(result, csv2, f"Expected latest stage CSV ({csv2}), got {result}")
+
+    def test_get_csv_path_fallback_plain_csv(self):
+        """get_csv_path returns plain (unnumbered) CSV when no numbered files exist."""
+        net, _ = self._create_reinvent_net_via_api(build=False)
+        self._ensure_net_checkpoint(net)
+
+        env = self._create_dataset_like(
+            models.ReinventEnvironment,
+            name="CSV Fallback Env",
+            prior_net=net,
+            agent_net=net,
+            aggregation_type="geometric_mean",
+        )
+        train_cfg = self._create_strategy_like(
+            models.ReinventAgentTraining,
+            model_instance=net,
+            summary_csv_prefix="reinvent",
+        )
+        agent = self._create_model_like(
+            models.ReinventAgent,
+            name="CSV Fallback Agent",
+            environment=env,
+            training=train_cfg,
+        )
+        gen = self._create_model_like(
+            models.Reinvent,
+            name="CSV Fallback Run",
+            environment=env,
+            agent=agent,
+        )
+
+        sl_dir = agent._sl_dir()
+        os.makedirs(sl_dir, exist_ok=True)
+
+        prefix = agent._results_prefix(gen)
+        plain = os.path.join(sl_dir, f"{prefix}.csv")
+        with open(plain, "w") as f:
+            f.write("step,SMILES,Score\n1,CCO,0.5\n")
+
+        result = agent.get_csv_path(generator=gen)
+        self.assertEqual(result, plain)
+
+    def _ensure_net_checkpoint(self, net):
+        net.prepareData()
+        net.run_transfer_learning(device="cpu")
+
+
+# ---------------------------------------------------------------------
+# Tests: Stage queryset filtering by generator
+# ---------------------------------------------------------------------
+@override_settings(
+    ROOT_URLCONF="genui.urls",
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
+class StageFilteringTests(SetUpReinventMixIn, APITestCase):
+    def test_stages_filtered_by_generator_param(self):
+        """GET /reinvent/stages/?generator=X returns only stages for that run."""
+        net, _ = self._create_reinvent_net_via_api(build=False)
+
+        env = self._create_dataset_like(
+            models.ReinventEnvironment,
+            name="Stage Filter Env",
+            prior_net=net,
+            agent_net=net,
+            aggregation_type="geometric_mean",
+        )
+        train_cfg = self._create_strategy_like(
+            models.ReinventAgentTraining,
+            model_instance=net,
+        )
+        agent = self._create_model_like(
+            models.ReinventAgent,
+            name="Stage Filter Agent",
+            environment=env,
+            training=train_cfg,
+        )
+        gen1 = self._create_model_like(
+            models.Reinvent, name="Run A", environment=env, agent=agent,
+        )
+        gen2 = self._create_model_like(
+            models.Reinvent, name="Run B", environment=env, agent=agent,
+        )
+
+        # Create 2 stages for gen1, 1 stage for gen2
+        models.ReinventStage.objects.create(generator=gen1, order=0)
+        models.ReinventStage.objects.create(generator=gen1, order=1)
+        models.ReinventStage.objects.create(generator=gen2, order=0)
+
+        url = reverse("reinventstage-list")
+        resp1 = self.client.get(url, {"generator": gen1.id})
+        self.assertEqual(resp1.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(resp1.data), 2)
+
+        resp2 = self.client.get(url, {"generator": gen2.id})
+        self.assertEqual(resp2.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(resp2.data), 1)
+
+
+# ---------------------------------------------------------------------
+# Tests: PropertyScorer API CRUD
+# ---------------------------------------------------------------------
+@override_settings(
+    ROOT_URLCONF="genui.urls",
+    CELERY_TASK_ALWAYS_EAGER=True,
+    CELERY_TASK_EAGER_PROPAGATES=True,
+)
+class PropertyScorerAPITests(SetUpReinventMixIn, APITestCase):
+    def test_create_property_scorer(self):
+        url = reverse("reinvent-property-scorer-list")
+        payload = {
+            "name": "QED Scorer",
+            "property_name": "Qed",
+            "weight": 1.0,
+            "project": self.project.id,
+        }
+        resp = self.client.post(url, data=payload, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED, msg=resp.data)
+        self.assertEqual(resp.data["property_name"], "Qed")
+
+    def test_list_property_scorers_filtered_by_project(self):
+        models.PropertyScorer.objects.create(
+            name="PS1", property_name="Qed", weight=1.0, project=self.project,
+        )
+        url = reverse("reinvent-property-scorer-list")
+        resp = self.client.get(url, {"project_id": self.project.id})
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(len(resp.data), 1)
+
+    def test_delete_property_scorer(self):
+        ps = models.PropertyScorer.objects.create(
+            name="ToDelete", property_name="SlogP", weight=0.5, project=self.project,
+        )
+        url = reverse("reinvent-property-scorer-detail", args=[ps.id])
+        resp = self.client.delete(url)
+        self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(models.PropertyScorer.objects.filter(pk=ps.id).exists())
+
+

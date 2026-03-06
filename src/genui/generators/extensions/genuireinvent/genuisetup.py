@@ -81,8 +81,62 @@ def ensure_reinvent_prior(*, force: bool = False) -> str:
             pass
 
 
+def _initialize_reinvent_metrics():
+    """
+    Initialize ModelPerformanceMetric objects for REINVENT agent validation.
+    These metrics are used to track the performance of the trained agent during validation.
+    """
+    from genui.models.models import ModelPerformanceMetric, Algorithm, AlgorithmMode
+
+    # Get or create ReinventNet algorithm and ReinventAgent mode
+    try:
+        reinvent_algo, _ = Algorithm.objects.get_or_create(name="ReinventNet")
+        agent_mode, _ = AlgorithmMode.objects.get_or_create(name="ReinventAgent")
+    except Exception:
+        # If algorithm/mode don't exist yet, skip initialization
+        return
+
+    # Define REINVENT validation metrics
+    metric_definitions = [
+        {
+            "name": "DrExLoss",
+            "description": "Loss value from the agent training"
+        },
+        {
+            "name": "SMILES_ER",
+            "description": "SMILES error rate - percentage of invalid SMILES generated"
+        },
+        {
+            "name": "SMILES_UQR",
+            "description": "SMILES uniqueness ratio - fraction of unique molecules generated"
+        },
+        {
+            "name": "DrExDesire",
+            "description": "Desirability score - objective score of generated molecules"
+        }
+    ]
+
+    # Create or update metrics
+    for metric_def in metric_definitions:
+        metric, _ = ModelPerformanceMetric.objects.get_or_create(
+            name=metric_def["name"],
+            defaults={"description": metric_def["description"]}
+        )
+
+        # Ensure ReinventNet algorithm is associated with this metric
+        if reinvent_algo not in metric.validAlgorithms.all():
+            metric.validAlgorithms.add(reinvent_algo)
+
+        # Ensure ReinventAgent mode is associated with this metric
+        if agent_mode not in metric.validModes.all():
+            metric.validModes.add(agent_mode)
+
+        metric.save()
+
+
 def setup(*args, **kwargs):
     from genui.utils.init import createGroup
+    from genui.models.models import ModelPerformanceMetric, Algorithm, AlgorithmMode
     from . import models
 
     # Ensure prior exists during setup
@@ -101,7 +155,6 @@ def setup(*args, **kwargs):
             models.ReinventNetValidation,
             models.ModelPerformanceReinvent,
             models.ReinventEnvironment,
-            models.ReinventEnvironmentScores,
             models.ReinventDiversityFilter,
             models.ScoreModifier,
             models.ClippedScore,
@@ -118,3 +171,6 @@ def setup(*args, **kwargs):
         ],
         force=force,
     )
+
+    # Initialize REINVENT validation metrics
+    _initialize_reinvent_metrics()

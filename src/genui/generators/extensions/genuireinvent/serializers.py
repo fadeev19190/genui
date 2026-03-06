@@ -8,7 +8,7 @@ from rest_framework import serializers
 
 from genui.compounds.models import MolSet
 from genui.compounds.serializers import MolSetSerializer
-from genui.models.models import ModelPerformanceMetric
+from genui.models.models import ModelPerformanceMetric, Algorithm, AlgorithmMode, Model
 from genui.models.serializers import (
     ModelSerializer,
     TrainingStrategyInitSerializer,
@@ -91,8 +91,9 @@ class ReinventTrainingStrategyInitSerializer(TrainingStrategyInitSerializer):
 class ReinventNetSerializer(ModelSerializer):
     molset = MolSetSerializer(many=False, required=False, allow_null=True)
 
-    trainingStrategy = ReinventTrainingStrategySerializer(many=False)
-    validationStrategy = ReinventValidationStrategySerializer(many=False, required=False)
+    # Override to avoid Model.trainingStrategy property throwing on duplicates.
+    trainingStrategy = serializers.SerializerMethodField(read_only=True)
+    validationStrategy = serializers.SerializerMethodField(read_only=True)
 
     parent = serializers.SerializerMethodField()
     bestEpoch = serializers.SerializerMethodField(read_only=True)
@@ -118,12 +119,20 @@ class ReinventNetSerializer(ModelSerializer):
         return None
 
     def get_bestEpoch(self, obj):
-        ts = getattr(obj, "trainingStrategy", None)
-        return getattr(ts, "best_epoch", None)
+        ts = obj.trainingStrategies.order_by("-id").first()
+        return getattr(ts, "best_epoch", None) if ts else None
 
     def get_bestValidLoss(self, obj):
-        ts = getattr(obj, "trainingStrategy", None)
-        return getattr(ts, "best_valid_loss", None)
+        ts = obj.trainingStrategies.order_by("-id").first()
+        return getattr(ts, "best_valid_loss", None) if ts else None
+
+    def get_trainingStrategy(self, obj):
+        ts = obj.trainingStrategies.order_by("-id").first()
+        return ReinventTrainingStrategySerializer(ts).data if ts else None
+
+    def get_validationStrategy(self, obj):
+        vs = obj.validationStrategies.order_by("-id").first()
+        return ReinventValidationStrategySerializer(vs).data if vs else None
 
 
 class ReinventNetInitSerializer(ReinventNetSerializer):
@@ -377,53 +386,62 @@ class ScoreModifierSerializer(serializers.Serializer):
         return instance
 
 
-class ReinventEnvironmentScoresSerializer(serializers.ModelSerializer):
-    property_scorers = serializers.PrimaryKeyRelatedField(
-        many=True, read_only=True, source="propertyscorer_set"
-    )
-    model_scorers = serializers.PrimaryKeyRelatedField(
-        many=True, read_only=True, source="genuimodelscorer_set"
-    )
-    unwanted_smarts_scorers = serializers.PrimaryKeyRelatedField(
-        many=True, read_only=True, source="unwantedsmartsscorer_set"
-    )
-
-    class Meta:
-        model = models.ReinventEnvironmentScores
-        fields = (
-            "id",
-            "aggregation_type",
-            "property_scorers",
-            "model_scorers",
-            "unwanted_smarts_scorers",
-        )
-
 
 class PropertyScorerSerializer(serializers.ModelSerializer):
+    # Read-only: the transform that will actually be written to the TOML.
+    # Reflects transform_params if set, otherwise the auto-default for the property.
+    effective_transform = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = models.PropertyScorer
         fields = "__all__"
+        read_only_fields = ("id", "effective_transform")
+
+    def get_effective_transform(self, obj):
+        try:
+            return obj.build_transform()
+        except Exception:
+            return None
 
 
 class GenUIModelScorerSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.GenUIModelScorer
         fields = "__all__"
+        read_only_fields = ("id",)
 
 
 class UnwantedSmartsScorerSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.UnwantedSmartsScorer
         fields = "__all__"
+        read_only_fields = ("id",)
+
 
 
 class ReinventEnvironmentSerializer(serializers.ModelSerializer):
     prior_path = serializers.SerializerMethodField(read_only=True)
     agent_path = serializers.SerializerMethodField(read_only=True)
+    prior_net_name = serializers.SerializerMethodField(read_only=True)
+    agent_net_name = serializers.SerializerMethodField(read_only=True)
+    diversity_filter_detail = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = models.ReinventEnvironment
         fields = "__all__"
+        read_only_fields = ('id', 'created', 'updated', 'prior_path', 'agent_path',
+                            'prior_net_name', 'agent_net_name', 'diversity_filter_detail')
+
+    def create(self, validated_data):
+        from django.utils import timezone
+        # Ensure created and updated are set before calling model's __init__
+        instance = models.ReinventEnvironment(**validated_data)
+        if not instance.created:
+            instance.created = timezone.now()
+        if not instance.updated:
+            instance.updated = timezone.now()
+        instance.save()
+        return instance
 
     def get_prior_path(self, obj):
         try:
@@ -437,27 +455,211 @@ class ReinventEnvironmentSerializer(serializers.ModelSerializer):
         except Exception:
             return None
 
+    def get_prior_net_name(self, obj):
+        try:
+            return obj.prior_net.name if obj.prior_net else None
+        except Exception:
+            return None
+
+    def get_agent_net_name(self, obj):
+        try:
+            return obj.agent_net.name if obj.agent_net else None
+        except Exception:
+            return None
+
+    def get_diversity_filter_detail(self, obj):
+        try:
+            df = obj.diversity_filter
+            if not df:
+                return None
+            return {
+                'id': df.id,
+                'type': df.type,
+                'bucket_size': df.bucket_size,
+                'minscore': df.minscore,
+                'minsimilarity': df.minsimilarity,
+                'penalty_multiplier': df.penalty_multiplier,
+            }
+        except Exception:
+            return None
+
 
 # =====================================================================
 # 4) RL AGENT CONFIG SERIALIZERS
 # =====================================================================
 
 class ReinventAgentTrainingSerializer(serializers.ModelSerializer):
+    # Make TrainingStrategy base fields explicit so validation matches the DB constraints
+    algorithm = serializers.PrimaryKeyRelatedField(
+        queryset=Algorithm.objects.all(),
+        required=True,
+        allow_null=False
+    )
+    mode = serializers.PrimaryKeyRelatedField(
+        queryset=AlgorithmMode.objects.all(),
+        required=True,
+        allow_null=False
+    )
+    modelInstance = serializers.PrimaryKeyRelatedField(
+        queryset=Model.objects.all(),
+        required=True,
+        allow_null=False
+    )
+    # Explicit CharField for learning_type - will validate against model's choices at runtime
+    learning_type = serializers.CharField(
+        max_length=32,
+        required=False,
+        allow_blank=False,
+        default="dap"
+    )
+
     class Meta:
         model = models.ReinventAgentTraining
-        fields = "__all__"
+        fields = (
+            "id",
+            "algorithm",
+            "mode",
+            "modelInstance",
+            "batch_size",
+            "unique_sequences",
+            "randomize_smiles",
+            "tb_isim",
+            "use_checkpoint",
+            "purge_memories",
+            "summary_csv_prefix",
+            "learning_type",
+            "sigma",
+            "rate",
+        )
+        read_only_fields = ("id",)
+
+    def to_internal_value(self, data):
+        """Ensure learning_type defaults to 'dap' if not provided"""
+        if not data.get('learning_type'):
+            data = dict(data)  # Make a copy to avoid modifying original
+            data['learning_type'] = 'dap'
+        return super().to_internal_value(data)
 
 
 class ReinventAgentValidationSerializer(serializers.ModelSerializer):
+    # Make metrics optional with explicit field definition
+    metrics = serializers.PrimaryKeyRelatedField(
+        queryset=ModelPerformanceMetric.objects.all(),
+        many=True,
+        required=False,
+        allow_empty=True
+    )
+
     class Meta:
         model = models.ReinventAgentValidation
-        fields = "__all__"
+        fields = (
+            "id",
+            "modelInstance",
+            "validate_every",
+            "validation_dataset",
+            "metrics",
+        )
+        read_only_fields = ("id",)
+
+    def to_internal_value(self, data):
+        """Ensure metrics defaults to empty list if not provided"""
+        if not data.get('metrics'):
+            data = dict(data)  # Make a copy to avoid modifying original
+            data['metrics'] = []
+        return super().to_internal_value(data)
 
 
 class ReinventAgentSerializer(serializers.ModelSerializer):
+    name = serializers.CharField(max_length=256, required=False, allow_blank=True)
+    description = serializers.CharField(max_length=10000, required=False, allow_blank=True, default="")
+    environment_name = serializers.SerializerMethodField(read_only=True)
+    training_info = serializers.SerializerMethodField(read_only=True)
+    validation_info = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = models.ReinventAgent
-        fields = "__all__"
+        fields = (
+            "id",
+            "name",
+            "description",
+            "environment",
+            "environment_name",
+            "training",
+            "training_info",
+            "validation",
+            "validation_info",
+            "output_model",
+            "tb_logdir",
+            "json_out_config",
+        )
+        read_only_fields = ("id", "output_model", "environment_name", "training_info", "validation_info")
+
+    def get_environment_name(self, obj):
+        env = getattr(obj, "environment", None)
+        return env.name if env else None
+
+    def get_training_info(self, obj):
+        t = getattr(obj, "training", None)
+        if not t:
+            return None
+        return {
+            "id": t.id,
+            "batch_size": getattr(t, "batch_size", None),
+            "learning_type": getattr(t, "learning_type", None),
+            "sigma": getattr(t, "sigma", None),
+            "rate": getattr(t, "rate", None),
+        }
+
+    def get_validation_info(self, obj):
+        v = getattr(obj, "validation", None)
+        if not v:
+            return None
+        return {
+            "id": v.id,
+            "validate_every": getattr(v, "validate_every", None),
+        }
+
+    def create(self, validated_data):
+        """
+        Create ReinventAgent with proper project assignment.
+        The project is extracted from the related environment/training/validation objects.
+        """
+        from genui.models.models import ModelBuilder
+
+        # Get the environment to extract project
+        environment = validated_data.get('environment')
+
+        if not environment:
+            raise serializers.ValidationError({"environment": "Environment is required to determine the project."})
+
+        # Extract project from environment
+        project = environment.project
+
+        # Add project to validated_data if not present
+        validated_data['project'] = project
+
+        # Generate a default name if not provided
+        if 'name' not in validated_data or not validated_data.get('name'):
+            validated_data['name'] = f"Agent_{environment.id}"
+
+        # Set builder to ReinventAgent if not provided (required field)
+        if 'builder' not in validated_data or not validated_data.get('builder'):
+            try:
+                # Try to get the ReinventAgent builder
+                builder = ModelBuilder.objects.get(name='ReinventAgent')
+                validated_data['builder'] = builder
+            except ModelBuilder.DoesNotExist:
+                # If not found, get the first available builder
+                builder = ModelBuilder.objects.first()
+                if builder:
+                    validated_data['builder'] = builder
+                else:
+                    raise serializers.ValidationError(
+                        {"builder": "No ModelBuilder found in database. ReinventAgent builder must be registered."}
+                    )
+
+        # Call parent create method
+        return super().create(validated_data)
 
 
 # =====================================================================
@@ -469,20 +671,82 @@ class ReinventStageSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = models.ReinventStage
-        fields = "__all__"
+        fields = (
+            "id",
+            "generator",
+            "order",
+            "termination_type",
+            "max_score",
+            "min_steps",
+            "max_steps",
+            "scoring_source",
+            "aggregation_type",
+            "scoring_file",
+            "chkpt_net",
+            "chkpt_file",
+            "property_scorers",
+            "model_scorers",
+            "smarts_scorers",
+            "resolved_checkpoint_path",
+        )
+        read_only_fields = ("id", "scoring_file", "chkpt_file", "resolved_checkpoint_path")
 
     def get_resolved_checkpoint_path(self, obj):
         try:
-            # mirror model logic; safe default path is internal to build_staged_toml
             return obj.resolve_checkpoint_path(default_path="")
         except Exception:
             return None
 
 
 class ReinventSerializer(serializers.ModelSerializer):
+    agent_name = serializers.SerializerMethodField(read_only=True)
+    environment_name = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = models.Reinvent
-        fields = "__all__"
+        fields = (
+            "id",
+            "name",
+            "description",
+            "created",
+            "agent",
+            "agent_name",
+            "environment",
+            "environment_name",
+        )
+        read_only_fields = ("id", "agent_name", "environment_name", "created")
+
+    def get_agent_name(self, obj):
+        try:
+            return obj.agent.name if obj.agent else None
+        except Exception:
+            return None
+
+    def get_environment_name(self, obj):
+        try:
+            return obj.environment.name if obj.environment else None
+        except Exception:
+            return None
+
+
+class ReinventInlineStageSerializer(serializers.Serializer):
+    """Lightweight serializer for stages embedded in run creation payload."""
+    order = serializers.IntegerField(default=1)
+    termination_type = serializers.CharField(default="simple", max_length=64)
+    max_score = serializers.FloatField(default=1.0)
+    min_steps = serializers.IntegerField(default=1)
+    max_steps = serializers.IntegerField(default=100)
+    scoring_source = serializers.CharField(default="inline", max_length=16)
+    aggregation_type = serializers.CharField(default="geometric_mean", max_length=64, required=False)
+    property_scorers = serializers.PrimaryKeyRelatedField(
+        many=True, queryset=models.PropertyScorer.objects.all(), required=False
+    )
+    model_scorers = serializers.PrimaryKeyRelatedField(
+        many=True, queryset=models.GenUIModelScorer.objects.all(), required=False
+    )
+    smarts_scorers = serializers.PrimaryKeyRelatedField(
+        many=True, queryset=models.UnwantedSmartsScorer.objects.all(), required=False
+    )
 
 
 class ReinventInitSerializer(ReinventSerializer):
@@ -494,44 +758,88 @@ class ReinventInitSerializer(ReinventSerializer):
     build = serializers.BooleanField(required=False, default=False, write_only=True)
     device = serializers.CharField(required=False, default="cuda:0", write_only=True)
 
+    # Bad SMARTS penalty weight (0–1)
+    bad_smarts_weight = serializers.FloatField(required=False, default=1.0, write_only=True)
+
+    # Inline stages — created together with the run
+    stages = ReinventInlineStageSerializer(many=True, required=False, write_only=True)
+
+    # Make environment optional since it comes from the agent
+    environment = serializers.PrimaryKeyRelatedField(
+        queryset=models.ReinventEnvironment.objects.all(),
+        required=False,
+        allow_null=True
+    )
+
     class Meta(ReinventSerializer.Meta):
-        fields = "__all__"
+        fields = (
+            "id",
+            "name",
+            "description",
+            "agent",
+            "environment",
+            "tb_logdir",
+            "json_out_config",
+            "build",
+            "device",
+            "bad_smarts_weight",
+            "stages",
+        )
+        read_only_fields = ("id",)
 
     def create(self, validated_data):
+        from django.db import transaction
+
         tb_logdir = validated_data.pop("tb_logdir", None)
         json_out_config = validated_data.pop("json_out_config", None)
         validated_data.pop("build", None)
-        validated_data.pop("device", None)
+        device = validated_data.pop("device", None)
+        stages_data = validated_data.pop("stages", [])
+        # bad_smarts_weight stays in validated_data — it's a model field
 
-        instance = super().create(validated_data)
+        # Extract project and environment from agent
+        agent = validated_data.get('agent')
+        if agent:
+            # Get project from agent
+            validated_data['project'] = agent.project
+            # Auto-populate environment from agent if not provided
+            if 'environment' not in validated_data or validated_data.get('environment') is None:
+                validated_data['environment'] = agent.environment
+        else:
+            raise serializers.ValidationError({"agent": "Agent is required to determine the project."})
 
-        # write-through to agent
-        agent = getattr(instance, "agent", None)
-        if agent and (tb_logdir is not None or json_out_config is not None):
-            fields = []
-            if tb_logdir is not None:
-                agent.tb_logdir = tb_logdir
-                fields.append("tb_logdir")
-            if json_out_config is not None:
-                agent.json_out_config = json_out_config
-                fields.append("json_out_config")
-            if fields:
-                agent.save(update_fields=fields)
+        with transaction.atomic():
+            instance = super().create(validated_data)
 
-        # staged learning MUST have at least one stage
-        try:
-            if not instance.stages.exists():
-                models.ReinventStage.objects.create(
+            # write-through to agent
+            agent_instance = getattr(instance, "agent", None)
+            if agent_instance and (tb_logdir is not None or json_out_config is not None):
+                fields = []
+                if tb_logdir is not None:
+                    agent_instance.tb_logdir = tb_logdir
+                    fields.append("tb_logdir")
+                if json_out_config is not None:
+                    agent_instance.json_out_config = json_out_config
+                    fields.append("json_out_config")
+                if fields:
+                    agent_instance.save(update_fields=fields)
+
+            # Create inline stages with scorer assignments
+            for stage_data in stages_data:
+                prop_scorers = stage_data.pop("property_scorers", [])
+                model_scorers = stage_data.pop("model_scorers", [])
+                smarts_scorers = stage_data.pop("smarts_scorers", [])
+
+                stage = models.ReinventStage.objects.create(
                     generator=instance,
-                    order=1,
-                    termination_type="simple",
-                    max_score=1.0,
-                    min_steps=1,
-                    max_steps=100,
-                    scoring_source="inline",
+                    **stage_data,
                 )
-        except Exception:
-            pass
+                if prop_scorers:
+                    stage.property_scorers.set(prop_scorers)
+                if model_scorers:
+                    stage.model_scorers.set(model_scorers)
+                if smarts_scorers:
+                    stage.smarts_scorers.set(smarts_scorers)
 
         return instance
 
@@ -544,3 +852,4 @@ class ModelPerformanceReinventSerializer(serializers.ModelSerializer):
     class Meta:
         model = models.ModelPerformanceReinvent
         fields = "__all__"
+

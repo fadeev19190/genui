@@ -109,3 +109,101 @@ class ReinventNetwork(ReinventAlgorithm):
             self.callback(None)
 
         return self
+
+
+class ReinventSampler:
+    """
+    Utility class for sampling SMILES from a trained REINVENT model.
+    Used by Reinvent.get() to generate molecules on-demand.
+    """
+
+    def __init__(self, model_path, device="cpu"):
+        """
+        Initialize the sampler with a trained model.
+
+        :param model_path: Path to the .ckpt or .prior model file
+        :param device: Device to run on ('cpu' or 'cuda')
+        """
+        import torch
+
+        self.device = device
+        self.model_path = model_path
+
+        # Load the model using torch.load (works for REINVENT checkpoints)
+        try:
+            # Load checkpoint
+            # Note: weights_only=False is required for REINVENT models (PyTorch 2.6+)
+            checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+
+            # Extract the model (checkpoint format may vary)
+            if isinstance(checkpoint, dict):
+                if 'model' in checkpoint:
+                    self.model = checkpoint['model']
+                elif 'network' in checkpoint:
+                    self.model = checkpoint['network']
+                elif 'model_state_dict' in checkpoint:
+                    # Need to reconstruct model from state dict
+                    # For now, just use the whole checkpoint
+                    self.model = checkpoint
+                else:
+                    # Assume the checkpoint itself is the model
+                    self.model = checkpoint
+            else:
+                # Checkpoint is the model directly
+                self.model = checkpoint
+
+            # Move to device if it's a PyTorch module
+            if hasattr(self.model, 'to'):
+                self.model = self.model.to(device)
+                self.model.eval()
+
+        except Exception as e:
+            raise RuntimeError(f"Could not load REINVENT model from {model_path}: {str(e)}")
+
+    def sample(self, n_samples):
+        """
+        Sample SMILES from the model.
+
+        :param n_samples: Number of SMILES to generate
+        :return: List of SMILES strings
+        """
+        import torch
+
+        smiles_list = []
+        batch_size = min(128, n_samples)
+
+        with torch.no_grad():
+            while len(smiles_list) < n_samples:
+                current_batch_size = min(batch_size, n_samples - len(smiles_list))
+
+                try:
+                    # Try different sampling methods
+                    if hasattr(self.model, 'sample_smiles'):
+                        # REINVENT API with direct SMILES output
+                        batch_smiles = self.model.sample_smiles(current_batch_size)
+                    elif hasattr(self.model, 'sample'):
+                        # Standard sample method - returns (seqs, smiles, nlls)
+                        result = self.model.sample(current_batch_size)
+                        if isinstance(result, tuple) and len(result) >= 2:
+                            batch_smiles = result[1]  # SMILES are second element
+                        else:
+                            batch_smiles = result
+                    else:
+                        raise NotImplementedError(
+                            f"Model does not have a sample method. Available methods: {dir(self.model)}"
+                        )
+
+                    # Convert to list if needed
+                    if isinstance(batch_smiles, str):
+                        batch_smiles = [batch_smiles]
+                    elif not isinstance(batch_smiles, list):
+                        # Try to convert to list
+                        batch_smiles = list(batch_smiles)
+
+                    smiles_list.extend(batch_smiles[:current_batch_size])
+
+                except Exception as e:
+                    raise RuntimeError(f"Error during sampling: {str(e)}")
+
+        return smiles_list[:n_samples]
+
